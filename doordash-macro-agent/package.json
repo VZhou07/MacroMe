@@ -1,0 +1,29 @@
+{
+  "name": "doordash-macro-agent",
+  "version": "0.1.0",
+  "type": "module",
+  "scripts": {
+    "start": "tsx src/agent.ts",
+    "dev": "tsx src/agent.ts --dry-run",
+    "schedule": "tsx src/scheduler.ts",
+    "setup-profile": "tsx src/setup-profile.ts",
+    "save-recording": "tsx src/save-recording.ts",
+    "build-nutrition-db": "tsx scripts/build-nutrition-db.ts"
+  },
+  "dependencies": {
+    "@anthropic-ai/sdk": "^0.39.0",
+    "dotenv": "^17.4.2",
+    "node-cron": "^3.0.3",
+    "openai": "^7.15.0",
+    "playwright-core": "^1.63.0",
+    "steel-sdk": "^0.18.0",
+    "zod": "^3.23.8"
+  },
+  "devDependencies": {
+    "@types/node": "^22.0.0",
+    "@types/node-cron": "^3.0.11",
+    "ts-node": "^10.9.2",
+    "tsx": "^4.23.13",
+    "typescript": "^5.5.4"
+  }
+}
