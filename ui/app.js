@@ -39,7 +39,7 @@ const defaultState = () => ({
   macros: { protein: '', carbs: '', fat: '' },
   meals: MEAL_SEQUENCE.slice(0, DEFAULT_MEALS).map(([name, time]) => ({ id: uid(), name, time })),
   orderLeadMinutes: 45,
-  budget: { amount: 40, period: 'day', includesFeesAndTip: true, tipPercent: 15 },
+  budget: { amount: 15, period: 'day', includesFeesAndTip: true, tipPercent: 15 },
   days: ['mon', 'tue', 'wed', 'thu', 'fri'],
   addresses: [newAddress('Home')],
   assignments: {}, // "day|mealId" -> addressId; missing entries use the first address
@@ -48,6 +48,7 @@ const defaultState = () => ({
 let state = loadDraft() || defaultState();
 let current = 0;
 let furthest = 0;
+let isEditing = false; // true only when the wizard was reopened from Home to edit a saved plan
 
 // ---------- helpers ----------
 const $ = (sel, root = document) => root.querySelector(sel);
@@ -134,14 +135,6 @@ function renderMacros() {
   const parts = { protein: num(m.protein) * 4, carbs: num(m.carbs) * 4, fat: num(m.fat) * 9 };
   const bar = $('#splitBar');
   Object.entries(parts).forEach(([k, v]) => { $(`.${k}`, bar).style.width = cal ? `${(v / cal) * 100}%` : '0'; });
-  $('#splitLegend').innerHTML = Object.entries(parts)
-    .map(([k, v]) => `<span><i class="dot ${k}"></i> ${k[0].toUpperCase() + k.slice(1)} ${cal ? Math.round((v / cal) * 100) : 0}%</span>`)
-    .join('');
-}
-
-function mealHint(meal) {
-  const pm = perMealMacros();
-  return `~${pm.calories} cal · ${pm.protein}g P · ${pm.carbs}g C · ${pm.fat}g F${meal.time ? ` · order placed ${fmtTime(minusMinutes(meal.time, state.orderLeadMinutes))}` : ''}`;
 }
 
 function renderMeals() {
@@ -156,10 +149,11 @@ function renderMeals() {
       <span class="meal-idx">${pos + 1}</span>
       <input type="text" data-meal="${i}" data-key="name" value="${esc(meal.name)}" aria-label="Meal ${pos + 1} name" maxlength="30">
       <input type="time" data-meal="${i}" data-key="time" value="${esc(meal.time)}" aria-label="Meal ${pos + 1} time">
-      <span class="meal-macros">${mealHint(meal)}</span>
     </div>`).join('');
-  field('lead').value = String(state.orderLeadMinutes);
 }
+
+const TIP_STEP = 1;
+const TIP_MAX = 30;
 
 function renderBudget() {
   const b = state.budget;
@@ -170,7 +164,9 @@ function renderBudget() {
   range.value = Math.min(num(b.amount), max);
   $$('#budgetPeriod button').forEach((btn) => btn.setAttribute('aria-pressed', String(btn.dataset.period === b.period)));
   field('includesFees').checked = b.includesFeesAndTip;
-  field('tip').value = String(b.tipPercent);
+  $('#tipOutput').textContent = `${b.tipPercent}%`;
+  $('#tipMinus').disabled = b.tipPercent <= 0;
+  $('#tipPlus').disabled = b.tipPercent >= TIP_MAX;
 
   const perOrder = perOrderBudget();
   const weekly = perOrder * ordersPerWeek();
@@ -187,9 +183,6 @@ function renderDays() {
   const set = [...state.days].sort().join();
   const presets = { weekdays: 'fri,mon,thu,tue,wed', weekends: 'sat,sun', all: 'fri,mon,sat,sun,thu,tue,wed' };
   $$('[data-days]').forEach((b) => b.setAttribute('aria-pressed', String(presets[b.dataset.days] === set)));
-  $('#dayStats').innerHTML = `
-    <div class="stat"><b>${state.days.length}</b>${state.days.length === 1 ? 'day' : 'days'} a week</div>
-    <div class="stat"><b>${ordersPerWeek()}</b>orders a week</div>`;
 }
 
 function renderAddresses() {
@@ -236,7 +229,6 @@ function renderAssignments() {
 
   const options = (selected) => state.addresses
     .map((a) => `<option value="${a.id}" ${a.id === selected ? 'selected' : ''}>${esc(a.label || 'Unnamed')}</option>`).join('');
-  $('#setAll').innerHTML = `<option value="">Choose…</option>${options(null)}`;
 
   const meals = mealsByTime();
   $('#assignTable').innerHTML = `
@@ -247,10 +239,6 @@ function renderAssignments() {
         return `<td><select class="addr-select" data-assign="${day}|${m.id}" style="--addr:${addressColor(id)}" aria-label="${long} ${esc(m.name)} address">${options(id)}</select></td>`;
       }).join('')}</tr>`).join('')}
     </tbody>`;
-
-  const counts = ordersPerAddress();
-  $('#addrStats').innerHTML = state.addresses
-    .map((a) => `<div class="stat"><b>${counts[a.id]}</b>${esc(a.label || 'Unnamed')} orders / week</div>`).join('');
 }
 
 function renderReview() {
@@ -262,9 +250,9 @@ function renderReview() {
     <span><b>${esc(a.label)}</b> · ${esc(`${a.street}${a.apt ? `, ${a.apt}` : ''}, ${a.city}, ${a.state} ${a.zip}`)} · ${a.dropoff === 'door' ? 'Leave at door' : 'Hand to me'} · ${plural(counts[a.id], 'order')}/week</span></li>`).join('');
   const items = [
     ['macros', 'Daily macros', `${calories(m).toLocaleString()} cal`, `${m.protein}g protein · ${m.carbs}g carbs · ${m.fat}g fat`],
-    ['meals', 'Meals', `${state.meals.length} a day`, mealsByTime().map((x) => `${esc(x.name)} ${fmtTime(x.time)}`).join(' · ')],
-    ['budget', 'Budget', `${money(num(state.budget.amount))} per ${state.budget.period}`, `≈ ${money(perOrderBudget())} per order · ${state.budget.tipPercent}% tip${state.budget.includesFeesAndTip ? ' · fees included' : ''}`],
-    ['days', 'Days', `${ordersPerWeek()} orders a week`, dayNames],
+    ['meals', 'Meals', `${state.meals.length}/day`, mealsByTime().map((x) => `${esc(x.name)} ${fmtTime(x.time)}`).join(' · ')],
+    ['budget', 'Budget', `${money(num(state.budget.amount))}/${state.budget.period}`, `≈ ${money(perOrderBudget())} per order · ${state.budget.tipPercent}% tip${state.budget.includesFeesAndTip ? ' · fees included' : ''}`],
+    ['days', 'Days', `${ordersPerWeek()} meals/week`, dayNames],
     ['location', 'Deliver to', plural(state.addresses.length, 'address'), `<ul class="addr-lines">${addrLines}</ul>`, 'wide'],
   ];
   $('#review').innerHTML = items.map(([step, title, main, sub, cls = '']) => `
@@ -368,20 +356,36 @@ function buildConfig() {
   };
 }
 
-function upcomingOrders(config, count = 5) {
-  const now = new Date();
-  const out = [];
-  for (let d = 0; d < 14 && out.length < count; d++) {
-    const date = new Date(now.getFullYear(), now.getMonth(), now.getDate() + d);
-    const day = JS_DAY_TO_KEY[date.getDay()];
-    for (const order of config.schedule.filter((o) => o.day === day)) {
-      const [h, m] = order.time.split(':').map(Number);
-      const at = new Date(date.getFullYear(), date.getMonth(), date.getDate(), h, m);
-      if (at.getTime() - config.orderLeadMinutes * 60000 > now.getTime()) out.push({ at, order });
-      if (out.length >= count) break;
-    }
-  }
-  return out;
+// Reverses buildConfig(): reconstructs wizard state from a previously saved
+// config, so "Edit plan" reopens pre-filled instead of blank.
+function stateFromConfig(config) {
+  const meals = config.meals.map((m) => ({ id: uid(), name: m.name, time: m.time }));
+  const mealIdByName = Object.fromEntries(meals.map((m) => [m.name, m.id]));
+  const assignments = {};
+  config.schedule.forEach((o) => {
+    const mealId = mealIdByName[o.meal];
+    if (mealId) assignments[`${o.day}|${mealId}`] = o.addressId;
+  });
+  return {
+    macros: { protein: config.macros.protein, carbs: config.macros.carbs, fat: config.macros.fat },
+    meals,
+    orderLeadMinutes: config.orderLeadMinutes,
+    budget: { ...config.budget },
+    days: [...config.days],
+    addresses: config.addresses.map((a) => ({ ...a })),
+    assignments,
+  };
+}
+
+// ---------- home / onboarding screens ----------
+function showHome() {
+  $('#home').hidden = false;
+  $('#onboarding').hidden = true;
+}
+function showOnboarding() {
+  $('#home').hidden = true;
+  $('#onboarding').hidden = false;
+  $('#railHome').hidden = !isEditing;
 }
 
 async function launch() {
@@ -397,18 +401,28 @@ async function launch() {
   btn.disabled = false;
   saveDraft();
 
-  const dateFmt = new Intl.DateTimeFormat(undefined, { weekday: 'short', month: 'short', day: 'numeric' });
-  const addrLabel = (id) => config.addresses.find((a) => a.id === id)?.label ?? '';
-  $('#upcoming').innerHTML = upcomingOrders(config).map(({ at, order }) => `
-    <li><span class="when">${dateFmt.format(at)} · ${fmtTime(order.time)}</span>
-    <span class="meta">${esc(order.meal)} to ${esc(addrLabel(order.addressId))} · up to ${money(config.derived.perOrderBudget)} · ordered ${fmtTime(order.orderAt)}</span></li>`).join('');
-  $('#doneMsg').textContent = savedToServer
-    ? 'Plan saved to macrome-config.json. Here are your next orders.'
-    : "Couldn't reach the local server, so the plan is only saved in this browser. Run `npm run ui` and launch again so the agent can read it.";
-  $('#jsonOut').textContent = JSON.stringify(config, null, 2);
-  current = STEPS.length;
-  render();
+  if (!savedToServer) {
+    showError("Couldn't reach the local server, so your plan wasn't saved. Run `npm run dev` and try again.");
+    return;
+  }
+  showHome();
 }
+
+$('#homeEditPlan').addEventListener('click', async () => {
+  try {
+    const res = await fetch('/api/config');
+    if (res.ok) {
+      state = stateFromConfig(await res.json());
+      furthest = STEPS.length - 1;
+    }
+  } catch { /* fall back to whatever's already in memory */ }
+  isEditing = true;
+  current = STEPS.length - 1; // land on Review, pre-filled
+  showOnboarding();
+  render();
+});
+
+$('#railHome').addEventListener('click', () => showHome());
 
 // ---------- events ----------
 form.addEventListener('submit', (e) => {
@@ -426,7 +440,6 @@ form.addEventListener('submit', (e) => {
 });
 
 $('#back').addEventListener('click', () => { showError(null); current = Math.max(0, current - 1); render(); });
-$('#editPlan').addEventListener('click', () => { current = STEPS.length - 1; render(); });
 
 $('#addAddress').addEventListener('click', () => {
   if (state.addresses.length >= MAX_ADDRESSES) return;
@@ -492,15 +505,21 @@ function setMealCount(n) {
 $('#mealsMinus').addEventListener('click', () => setMealCount(state.meals.length - 1));
 $('#mealsPlus').addEventListener('click', () => setMealCount(state.meals.length + 1));
 
+function setTip(pct) {
+  state.budget.tipPercent = Math.min(TIP_MAX, Math.max(0, pct));
+  renderBudget();
+  saveDraft();
+}
+$('#tipMinus').addEventListener('click', () => setTip(state.budget.tipPercent - TIP_STEP));
+$('#tipPlus').addEventListener('click', () => setTip(state.budget.tipPercent + TIP_STEP));
+
 form.addEventListener('input', (e) => {
   const t = e.target;
   t.classList.remove('invalid');
   showError(null);
   if (['protein', 'carbs', 'fat'].includes(t.name)) { state.macros[t.name] = t.value === '' ? '' : +t.value; renderMacros(); }
   else if (t.dataset.meal !== undefined) {
-    const meal = state.meals[+t.dataset.meal];
-    meal[t.dataset.key] = t.value;
-    if (t.dataset.key === 'time') t.parentElement.querySelector('.meal-macros').textContent = mealHint(meal);
+    state.meals[+t.dataset.meal][t.dataset.key] = t.value;
   }
   else if (t.dataset.addr !== undefined) {
     state.addresses[+t.dataset.addr][t.dataset.key] = t.value;
@@ -509,22 +528,19 @@ form.addEventListener('input', (e) => {
   else if (t.dataset.assign) {
     state.assignments[t.dataset.assign] = t.value;
     t.style.setProperty('--addr', addressColor(t.value));
-    const counts = ordersPerAddress();
-    $('#addrStats').innerHTML = state.addresses
-      .map((a) => `<div class="stat"><b>${counts[a.id]}</b>${esc(a.label || 'Unnamed')} orders / week</div>`).join('');
   }
-  else if (t.id === 'setAll') {
-    if (t.value) {
-      selectedDays().forEach(([day]) => state.meals.forEach((m) => { state.assignments[`${day}|${m.id}`] = t.value; }));
-      renderAssignments();
-    }
-  }
-  else if (t.name === 'lead') { state.orderLeadMinutes = +t.value; renderMeals(); }
   else if (t.name === 'budget') { state.budget.amount = t.value === '' ? '' : +t.value; renderBudget(); }
   else if (t.id === 'budgetRange') { state.budget.amount = +t.value; renderBudget(); }
   else if (t.name === 'includesFees') state.budget.includesFeesAndTip = t.checked;
-  else if (t.name === 'tip') state.budget.tipPercent = +t.value;
   saveDraft();
 });
 
-render();
+// ---------- boot: home if a plan is already saved server-side, else onboarding ----------
+(async function boot() {
+  try {
+    const res = await fetch('/api/config');
+    if (res.ok) { showHome(); return; }
+  } catch { /* server unreachable, e.g. opened from file:// */ }
+  showOnboarding();
+  render();
+})();

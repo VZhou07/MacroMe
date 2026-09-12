@@ -11,8 +11,9 @@
   <link rel="stylesheet" href="styles.css">
 </head>
 <body>
-<div class="shell">
+<div class="shell" id="onboarding">
   <aside class="rail">
+    <button type="button" class="rail-home" id="railHome" hidden>← Home</button>
     <div class="brand"><span class="logo" aria-hidden="true">●</span>MacroMe</div>
     <p class="tagline">Your macros, delivered on autopilot.</p>
     <ol class="steps" id="stepList"></ol>
@@ -54,7 +55,6 @@
             <div class="split-bar" id="splitBar">
               <span class="protein"></span><span class="carbs"></span><span class="fat"></span>
             </div>
-            <div class="split-legend" id="splitLegend"></div>
           </div>
         </div>
       </section>
@@ -75,18 +75,6 @@
             </div>
           </div>
           <div id="mealRows" class="meal-rows"></div>
-        </div>
-
-        <div class="card compact">
-          <div class="row-between wrap">
-            <label class="field-title" for="lead">Place order ahead by</label>
-            <select id="lead" name="lead">
-              <option value="30">30 min</option>
-              <option value="45">45 min</option>
-              <option value="60">1 hour</option>
-              <option value="90">1.5 hours</option>
-            </select>
-          </div>
         </div>
       </section>
 
@@ -114,17 +102,18 @@
             <span>Budget includes delivery fees, service fees and tip</span>
           </label>
 
-          <div class="row-between wrap tip-row">
-            <label class="field-title" for="tip">Tip for the driver</label>
-            <select id="tip" name="tip">
-              <option value="0">0%</option>
-              <option value="10">10%</option>
-              <option value="15">15%</option>
-              <option value="20">20%</option>
-              <option value="25">25%</option>
-            </select>
+          <div class="row-between tip-row">
+            <span class="field-title">Tip for the driver</span>
+            <div class="stepper">
+              <button type="button" id="tipMinus" aria-label="Decrease tip">−</button>
+              <output id="tipOutput">15%</output>
+              <button type="button" id="tipPlus" aria-label="Increase tip">+</button>
+            </div>
           </div>
+        </div>
 
+        <div class="card compact">
+          <span class="field-title">Predicted expenditure</span>
           <div class="stats" id="budgetStats"></div>
         </div>
       </section>
@@ -143,7 +132,6 @@
 
         <div class="card">
           <div class="days" id="dayChips" role="group" aria-label="Days of the week"></div>
-          <div class="stats" id="dayStats"></div>
         </div>
       </section>
 
@@ -162,12 +150,8 @@
               <span class="field-title">Which address for each meal?</span>
               <span class="hint">Uses the days and meal times you already chose.</span>
             </div>
-            <label class="set-all">Set all to
-              <select id="setAll"></select>
-            </label>
           </div>
           <div class="table-wrap"><table class="assign" id="assignTable"></table></div>
-          <div class="stats" id="addrStats"></div>
         </div>
       </section>
 
@@ -179,21 +163,6 @@
         <div class="review-grid" id="review"></div>
       </section>
 
-      <!-- DONE -->
-      <section class="step" data-step="done">
-        <div class="done-badge" aria-hidden="true">✓</div>
-        <h2>Your agent is on it.</h2>
-        <p class="lede" id="doneMsg">Here are your next orders.</p>
-        <div class="card"><ul class="upcoming" id="upcoming"></ul></div>
-        <details class="json" id="jsonWrap">
-          <summary>View saved config</summary>
-          <pre id="jsonOut"></pre>
-        </details>
-        <div class="nav">
-          <button type="button" class="btn btn-ghost" id="editPlan">Edit plan</button>
-        </div>
-      </section>
-
       <p class="error" id="error" role="alert" hidden></p>
 
       <div class="nav" id="nav">
@@ -203,6 +172,17 @@
     </form>
   </main>
 </div>
+
+<div class="home" id="home" hidden>
+  <header class="home-bar">
+    <div class="brand"><span class="logo" aria-hidden="true">●</span>MacroMe</div>
+    <button type="button" class="btn btn-ghost" id="homeEditPlan">Edit plan</button>
+  </header>
+  <main class="home-main">
+    <p class="home-status" id="homeStatus">Your plan is set. MacroMe will start ordering for you.</p>
+  </main>
+</div>
+
 <script src="app.js"></script>
 </body>
 </html>
