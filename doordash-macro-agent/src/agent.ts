@@ -6,6 +6,7 @@ import { loadConfig } from "./config.js";
 import { addItemToCart, findStores, goToCheckout, placeOrder, scrapeMenu } from "./doordash.js";
 import { pickMeals } from "./macro-picker.js";
 import { printOrderSummary, promptApproval } from "./notifier.js";
+import { printLiveView } from "./live-view.js";
 import { writeReport } from "./report.js";
 import type { MealConfig, StoreMenu } from "./types.js";
 
@@ -60,7 +61,8 @@ export async function runMealOrder(mealConfig: MealConfig): Promise<void> {
     });
 
   if (isDryRun) {
-    console.log("[agent] DRY RUN — skipping browser, using mock menu data");
+    console.log("[agent] DRY RUN — no Steel browser / no live view link.");
+    console.log("[agent] For a browser link, run: npm run setup-profile  (login) or  npm start  (live order)");
     const result = await pickMeals(MOCK_MENUS, mealConfig, config.macros, config.budgetPerMeal);
     chosenItemId = result.picks[0]?.itemId ?? null;
     if (result.picks[0]) printOrderSummary(mealConfig, result.picks[0]);
@@ -88,7 +90,7 @@ export async function runMealOrder(mealConfig: MealConfig): Promise<void> {
     // Don't enable optimizeBandwidth/blockAds: DoorDash's Cloudflare treats the
     // stripped-down browser as a bot and serves a verification page instead.
   });
-  console.log(`[agent] Live view: https://app.steel.dev/sessions/${session.id}`);
+  printLiveView("agent", session);
 
   const browser = await chromium.connectOverCDP(session.websocketUrl);
   const context = browser.contexts()[0];

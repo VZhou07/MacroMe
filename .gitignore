@@ -9,3 +9,13 @@ __pycache__/
 client_secret*.json
 *token*.json
 credentials.json
+.env
+.env.*
+!.env.example
+*.har
+playwright-report/
+test-results/
+.cursor/
+.venv/
+venv/
+node_modules/

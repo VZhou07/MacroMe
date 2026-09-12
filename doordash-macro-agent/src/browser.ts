@@ -1,4 +1,5 @@
 import Steel from "steel-sdk";
+import { printLiveView } from "./live-view.js";
 
 const client = new Steel({ steelAPIKey: process.env.STEEL_API_KEY });
 
@@ -11,8 +12,7 @@ export async function startSession(profileId: string): Promise<string> {
     persistProfile: false,
   });
   sessionId = session.id;
-  console.log(`[browser] Session started: ${session.id}`);
-  console.log(`[browser] Live view: https://app.steel.dev/sessions/${session.id}`);
+  printLiveView("browser", session);
   return session.id;
 }
 
