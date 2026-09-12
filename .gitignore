@@ -1,9 +1,11 @@
+# MacroMe user plan (contains addresses)
+macrome-config.json
+
+node_modules/
+.env
 .venv/
 __pycache__/
 *.pyc
-.env
-.env.*
-!.env.example
-*.har
-playwright-report/
-test-results/
+client_secret*.json
+*token*.json
+credentials.json

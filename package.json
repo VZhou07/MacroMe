@@ -1,0 +1,27 @@
+{
+  "name": "goosegpt",
+  "version": "1.0.0",
+  "description": "",
+  "main": "index.js",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1",
+    "dev": "node server.js"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/VZhou07/GooseGPT.git"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "type": "commonjs",
+  "bugs": {
+    "url": "https://github.com/VZhou07/GooseGPT/issues"
+  },
+  "homepage": "https://github.com/VZhou07/GooseGPT#readme",
+  "dependencies": {
+    "@anthropic-ai/sdk": "^0.125.0",
+    "dotenv": "^17.4.2",
+    "steel-sdk": "^0.18.0"
+  }
+}

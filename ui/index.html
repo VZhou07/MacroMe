@@ -1,0 +1,208 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>MacroMe · Set up your meal plan</title>
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'><circle cx='8' cy='8' r='7' fill='%23E0562F'/></svg>">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=DM+Sans:opsz,wght@9..40,400;9..40,500;9..40,700&family=Fraunces:opsz,wght@9..144,600;9..144,700&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+<div class="shell">
+  <aside class="rail">
+    <div class="brand"><span class="logo" aria-hidden="true">●</span>MacroMe</div>
+    <p class="tagline">Your macros, delivered on autopilot.</p>
+    <ol class="steps" id="stepList"></ol>
+    <p class="rail-foot">Your agent orders on DoorDash for you, following the plan you set here.</p>
+  </aside>
+
+  <main class="stage">
+    <div class="progress" aria-hidden="true"><div class="progress-bar" id="progressBar"></div></div>
+
+    <form id="wizard" novalidate autocomplete="on">
+
+      <!-- 1 · MACROS -->
+      <section class="step" data-step="macros">
+        <p class="eyebrow">Step 1 of 6</p>
+        <h2>What are your daily macro goals?</h2>
+        <p class="lede">Enter your daily targets, such as the ones from your dietitian, coach or tracking app. The agent picks meals that add up to them across your day.</p>
+
+        <div class="card">
+          <div class="macro-grid">
+            <label class="macro">
+              <span class="macro-label"><i class="dot protein"></i>Protein</span>
+              <span class="suffix-input"><input type="number" name="protein" placeholder="0" min="0" max="500" inputmode="numeric"><em>g</em></span>
+            </label>
+            <label class="macro">
+              <span class="macro-label"><i class="dot carbs"></i>Carbs</span>
+              <span class="suffix-input"><input type="number" name="carbs" placeholder="0" min="0" max="900" inputmode="numeric"><em>g</em></span>
+            </label>
+            <label class="macro">
+              <span class="macro-label"><i class="dot fat"></i>Fat</span>
+              <span class="suffix-input"><input type="number" name="fat" placeholder="0" min="0" max="400" inputmode="numeric"><em>g</em></span>
+            </label>
+          </div>
+
+          <div class="calories">
+            <div>
+              <span class="big" id="calTotal">0</span>
+              <span class="unit">calories / day</span>
+            </div>
+            <div class="split-bar" id="splitBar">
+              <span class="protein"></span><span class="carbs"></span><span class="fat"></span>
+            </div>
+            <div class="split-legend" id="splitLegend"></div>
+          </div>
+        </div>
+      </section>
+
+      <!-- 2 · MEALS -->
+      <section class="step" data-step="meals">
+        <p class="eyebrow">Step 2 of 6</p>
+        <h2>How many meals a day, and when?</h2>
+        <p class="lede">Set when you want to eat. The agent places each order early enough for it to arrive on time.</p>
+
+        <div class="card">
+          <div class="row-between">
+            <span class="field-title">Meals per day</span>
+            <div class="stepper">
+              <button type="button" id="mealsMinus" aria-label="Fewer meals">−</button>
+              <output id="mealCount">2</output>
+              <button type="button" id="mealsPlus" aria-label="More meals">+</button>
+            </div>
+          </div>
+          <div id="mealRows" class="meal-rows"></div>
+        </div>
+
+        <div class="card compact">
+          <div class="row-between wrap">
+            <label class="field-title" for="lead">Place order ahead by</label>
+            <select id="lead" name="lead">
+              <option value="30">30 min</option>
+              <option value="45">45 min</option>
+              <option value="60">1 hour</option>
+              <option value="90">1.5 hours</option>
+            </select>
+          </div>
+        </div>
+      </section>
+
+      <!-- 3 · BUDGET -->
+      <section class="step" data-step="budget">
+        <p class="eyebrow">Step 3 of 6</p>
+        <h2>What's your budget?</h2>
+        <p class="lede">The agent won't check out a cart that goes over this.</p>
+
+        <div class="card">
+          <div class="seg" role="group" aria-label="Budget period" id="budgetPeriod">
+            <button type="button" data-period="meal">Per meal</button>
+            <button type="button" data-period="day">Per day</button>
+            <button type="button" data-period="week">Per week</button>
+          </div>
+
+          <label class="money">
+            <span>$</span>
+            <input type="number" name="budget" min="1" step="1" inputmode="decimal" aria-label="Budget amount">
+          </label>
+          <input type="range" id="budgetRange" min="5" max="150" step="1" aria-label="Budget slider">
+
+          <label class="check">
+            <input type="checkbox" name="includesFees">
+            <span>Budget includes delivery fees, service fees and tip</span>
+          </label>
+
+          <div class="row-between wrap tip-row">
+            <label class="field-title" for="tip">Tip for the driver</label>
+            <select id="tip" name="tip">
+              <option value="0">0%</option>
+              <option value="10">10%</option>
+              <option value="15">15%</option>
+              <option value="20">20%</option>
+              <option value="25">25%</option>
+            </select>
+          </div>
+
+          <div class="stats" id="budgetStats"></div>
+        </div>
+      </section>
+
+      <!-- 4 · DAYS -->
+      <section class="step" data-step="days">
+        <p class="eyebrow">Step 4 of 6</p>
+        <h2>Which days should we order?</h2>
+        <p class="lede">Leave out days you're cooking, eating out or traveling.</p>
+
+        <div class="chips" role="group" aria-label="Day presets">
+          <button type="button" class="chip" data-days="weekdays">Weekdays</button>
+          <button type="button" class="chip" data-days="weekends">Weekends</button>
+          <button type="button" class="chip" data-days="all">Every day</button>
+        </div>
+
+        <div class="card">
+          <div class="days" id="dayChips" role="group" aria-label="Days of the week"></div>
+          <div class="stats" id="dayStats"></div>
+        </div>
+      </section>
+
+      <!-- 5 · LOCATION -->
+      <section class="step" data-step="location">
+        <p class="eyebrow">Step 5 of 6</p>
+        <h2>Where should it be delivered?</h2>
+        <p class="lede">Save up to three addresses, then pick where each meal goes.</p>
+
+        <div id="addressList"></div>
+        <button type="button" class="add-address" id="addAddress">+ Add another address</button>
+
+        <div class="card" id="assignCard">
+          <div class="row-between wrap">
+            <div>
+              <span class="field-title">Which address for each meal?</span>
+              <span class="hint">Uses the days and meal times you already chose.</span>
+            </div>
+            <label class="set-all">Set all to
+              <select id="setAll"></select>
+            </label>
+          </div>
+          <div class="table-wrap"><table class="assign" id="assignTable"></table></div>
+          <div class="stats" id="addrStats"></div>
+        </div>
+      </section>
+
+      <!-- 6 · REVIEW -->
+      <section class="step" data-step="review">
+        <p class="eyebrow">Step 6 of 6</p>
+        <h2>Look good?</h2>
+        <p class="lede">Check your plan. When you're ready, launch the agent.</p>
+        <div class="review-grid" id="review"></div>
+      </section>
+
+      <!-- DONE -->
+      <section class="step" data-step="done">
+        <div class="done-badge" aria-hidden="true">✓</div>
+        <h2>Your agent is on it.</h2>
+        <p class="lede" id="doneMsg">Here are your next orders.</p>
+        <div class="card"><ul class="upcoming" id="upcoming"></ul></div>
+        <details class="json" id="jsonWrap">
+          <summary>View saved config</summary>
+          <pre id="jsonOut"></pre>
+        </details>
+        <div class="nav">
+          <button type="button" class="btn btn-ghost" id="editPlan">Edit plan</button>
+        </div>
+      </section>
+
+      <p class="error" id="error" role="alert" hidden></p>
+
+      <div class="nav" id="nav">
+        <button type="button" class="btn btn-ghost" id="back">Back</button>
+        <button type="submit" class="btn btn-primary" id="next">Continue</button>
+      </div>
+    </form>
+  </main>
+</div>
+<script src="app.js"></script>
+</body>
+</html>
