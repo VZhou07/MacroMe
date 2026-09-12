@@ -47,7 +47,11 @@ export async function pickMeals(
   menus: StoreMenu[],
   mealConfig: MealConfig,
   dailyMacros: MacroGoals,
-  budgetPerMeal: number
+  budgetPerMeal: number,
+  // Natural-language brief from the user's onboarding plan (see plan.ts). It
+  // carries what the numeric targets can't: delivery context, cuisine
+  // preferences and dietary constraints.
+  brief = ""
 ): Promise<PickMealsResult> {
   const target = {
     calories: Math.round(dailyMacros.calories * mealConfig.macroShare),
@@ -69,8 +73,10 @@ export async function pickMeals(
 
   if (lookup.size === 0) return { picks: [], debug: { systemPrompt: "", userPrompt: "", rawResponse: "" } };
 
-  const systemPrompt = `You are a nutrition-aware meal selector. Choose menu items that best match the macro targets.
+  const briefSection = brief ? `\nThe customer's plan for this order:\n${brief}\n` : "";
 
+  const systemPrompt = `You are a nutrition-aware meal selector. Choose menu items that best match the macro targets.
+${briefSection}
 Macro targets for this meal (${mealConfig.name}):
 - Calories: ${target.calories} kcal
 - Protein: ${target.protein}g
@@ -78,7 +84,7 @@ Macro targets for this meal (${mealConfig.name}):
 - Fat: ${target.fat}g
 - Max budget: $${budgetPerMeal}
 
-Rules: only choose ids that appear in the menu in [brackets]; choose a single-serving meal for one person (no family-size, bundles, sides, drinks, or add-ons); prioritize protein; estimate macros from the name and description.
+Rules: only choose ids that appear in the menu in [brackets]; choose a single-serving meal for one person (no family-size, bundles, sides, drinks, or add-ons); prioritize protein; estimate macros from the name and description; treat any dietary requirement or avoided ingredient in the plan above as a hard constraint and never pick an item that breaks it.
 Return ONLY valid JSON, no extra text: a ranked array of up to 3 choices, best first:
 [{"itemId":"123","estimatedMacros":{"calories":0,"protein":0,"carbs":0,"fat":0},"reasoning":"brief reason"}]`;
 

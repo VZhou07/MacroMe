@@ -2,15 +2,19 @@ import "dotenv/config";
 import { pathToFileURL } from "url";
 import { chromium } from "playwright-core";
 import Steel from "steel-sdk";
-import { loadConfig } from "./config.js";
+import { loadPlan } from "./plan.js";
 import { addItemToCart, findStores, goToCheckout, placeOrder, scrapeMenu } from "./doordash.js";
 import { pickMeals } from "./macro-picker.js";
 import { printOrderSummary, promptApproval } from "./notifier.js";
-import { printLiveView } from "./live-view.js";
+import { printLiveView, liveViewUrl } from "./live-view.js";
+import { emit, enableEvents } from "./events.js";
 import { writeReport } from "./report.js";
 import type { MealConfig, StoreMenu } from "./types.js";
 
 const isDryRun = process.argv.includes("--dry-run");
+// `--web` makes the agent report progress as machine-readable events and take
+// its order approval from the web dashboard instead of the terminal.
+if (process.argv.includes("--web")) enableEvents();
 const client = new Steel({ steelAPIKey: process.env.STEEL_API_KEY });
 
 const MOCK_MENUS: StoreMenu[] = [
@@ -26,8 +30,14 @@ const MOCK_MENUS: StoreMenu[] = [
 ];
 
 export async function runMealOrder(mealConfig: MealConfig): Promise<void> {
-  const config = loadConfig();
+  const plan = loadPlan();
+  const config = plan.config;
+  // The onboarding plan in prose, handed to the meal picker alongside the
+  // numeric targets so preferences and delivery context reach the model.
+  const brief = plan.briefFor(mealConfig.name);
   console.log(`\n[agent] Starting order for: ${mealConfig.name}`);
+  console.log(`[agent] Plan: ${brief}`);
+  emit({ type: "status", message: `Starting order for ${mealConfig.name}` });
 
   const target = {
     calories: Math.round(config.macros.calories * mealConfig.macroShare),
@@ -63,12 +73,13 @@ export async function runMealOrder(mealConfig: MealConfig): Promise<void> {
   if (isDryRun) {
     console.log("[agent] DRY RUN — no Steel browser / no live view link.");
     console.log("[agent] For a browser link, run: npm run setup-profile  (login) or  npm start  (live order)");
-    const result = await pickMeals(MOCK_MENUS, mealConfig, config.macros, config.budgetPerMeal);
+    const result = await pickMeals(MOCK_MENUS, mealConfig, config.macros, config.budgetPerMeal, brief);
     chosenItemId = result.picks[0]?.itemId ?? null;
     if (result.picks[0]) printOrderSummary(mealConfig, result.picks[0]);
     const reportPath = saveReport(result);
     console.log(`[agent] Reasoning report: ${reportPath}`);
     console.log("[agent] DRY RUN complete — no order placed");
+    emit({ type: "result", placed: false, message: "Dry run complete — no order placed." });
     return;
   }
 
@@ -91,6 +102,7 @@ export async function runMealOrder(mealConfig: MealConfig): Promise<void> {
     // stripped-down browser as a bot and serves a verification page instead.
   });
   printLiveView("agent", session);
+  emit({ type: "live-view", url: liveViewUrl(session), sessionId: session.id });
 
   const browser = await chromium.connectOverCDP(session.websocketUrl);
   const context = browser.contexts()[0];
@@ -103,6 +115,7 @@ export async function runMealOrder(mealConfig: MealConfig): Promise<void> {
 
   try {
     console.log(`[agent] Searching DoorDash for "${config.searchQuery}"...`);
+    emit({ type: "status", message: `Searching DoorDash for "${config.searchQuery}"` });
     const stores = await findStores(page, config.searchQuery, config.maxStores);
     if (stores.length === 0) throw new Error("No stores found — the saved profile may be logged out. Re-run `npm run setup-profile`.");
 
@@ -113,6 +126,7 @@ export async function runMealOrder(mealConfig: MealConfig): Promise<void> {
       try {
         const menu = await scrapeMenu(storePage, store, config.budgetPerMeal);
         console.log(`[agent] ${menu.store}: ${menu.items.length} items within budget`);
+        emit({ type: "status", message: `Read ${menu.items.length} items from ${menu.store}` });
         if (menu.items.length > 0) menus.push(menu);
       } catch (err) {
         if (!browser.isConnected()) throw err;
@@ -123,12 +137,21 @@ export async function runMealOrder(mealConfig: MealConfig): Promise<void> {
     }
     if (menus.length === 0) throw new Error("Couldn't read any restaurant menus.");
 
-    const result = await pickMeals(menus, mealConfig, config.macros, config.budgetPerMeal);
+    const result = await pickMeals(menus, mealConfig, config.macros, config.budgetPerMeal, brief);
 
     let picked = null;
     let orderPage = page;
     for (const candidate of result.picks) {
       console.log(`[agent] Adding to cart: ${candidate.item} (${candidate.restaurant})`);
+      emit({
+        type: "picked",
+        item: candidate.item,
+        restaurant: candidate.restaurant,
+        price: candidate.price,
+        macros: candidate.estimatedMacros,
+        reasoning: candidate.reasoning,
+        source: candidate.source,
+      });
       // Fresh tab per attempt, same reason as the menu scrape above.
       const tab = await context.newPage();
       if (await addItemToCart(tab, candidate.storeUrl, candidate.itemId).catch(() => false)) {
@@ -159,13 +182,29 @@ export async function runMealOrder(mealConfig: MealConfig): Promise<void> {
     const reportPath = saveReport(result);
     console.log(`[agent] Reasoning report: ${reportPath}`);
 
+    emit({
+      type: "approval-request",
+      item: picked.item,
+      restaurant: picked.restaurant,
+      price: picked.price,
+      checkoutTotal,
+      macros: picked.estimatedMacros,
+      reasoning: picked.reasoning,
+      reportPath,
+    });
+
     approved = await promptApproval();
     if (approved) {
-      console.log((await placeOrder(orderPage))
-        ? "[agent] Order placed! Check DoorDash for confirmation."
-        : "[agent] Could not find the Place Order button — check the live view.");
+      const placed = await placeOrder(orderPage);
+      const message = placed
+        ? "Order placed! Check DoorDash for confirmation."
+        : "Could not find the Place Order button — check the live view.";
+      console.log(`[agent] ${message}`);
+      emit({ type: "result", placed, message });
     } else {
-      console.log("[agent] Order not placed. The item is still in your DoorDash cart.");
+      const message = "Order not placed. The item is still in your DoorDash cart.";
+      console.log(`[agent] ${message}`);
+      emit({ type: "result", placed: false, message });
     }
     saveReport(result);
   } finally {
@@ -176,8 +215,41 @@ export async function runMealOrder(mealConfig: MealConfig): Promise<void> {
   }
 }
 
+/**
+ * The meal this run is for: `--meal "Lunch"` when the server or scheduler names
+ * one, otherwise whichever meal in the plan is due next today (falling back to
+ * the first, so an off-hours manual run still does something sensible).
+ */
+function mealForThisRun(meals: MealConfig[]): MealConfig {
+  const flag = process.argv.indexOf("--meal");
+  if (flag !== -1 && process.argv[flag + 1]) {
+    const wanted = process.argv[flag + 1].toLowerCase();
+    const match = meals.find((m) => m.name.toLowerCase() === wanted);
+    if (!match) {
+      throw new Error(`No meal called "${process.argv[flag + 1]}" in your plan. Available: ${meals.map((m) => m.name).join(", ")}`);
+    }
+    return match;
+  }
+  const now = new Date();
+  const nowMinutes = now.getHours() * 60 + now.getMinutes();
+  const toMinutes = (t: string) => {
+    const [h, m] = t.split(":").map(Number);
+    return h * 60 + m;
+  };
+  const upcoming = [...meals].sort((a, b) => toMinutes(a.time) - toMinutes(b.time))
+    .find((m) => toMinutes(m.time) >= nowMinutes);
+  return upcoming ?? meals[0];
+}
+
 // Only auto-run when executed directly, not when imported by the scheduler.
 if (import.meta.url === pathToFileURL(process.argv[1]).href) {
-  const config = loadConfig();
-  await runMealOrder(config.meals[0]);
+  try {
+    const plan = loadPlan();
+    await runMealOrder(mealForThisRun(plan.config.meals));
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    console.error(`[agent] ${message}`);
+    emit({ type: "error", message });
+    process.exitCode = 1;
+  }
 }
