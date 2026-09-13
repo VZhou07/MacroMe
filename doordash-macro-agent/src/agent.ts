@@ -14,6 +14,7 @@ import { emit, enableEvents } from "./events.js";
 import { writeReport } from "./report.js";
 import { addMealToCart } from "./meal-components.js";
 import { prepareCheckout } from './checkout-recovery.js';
+import { shuffled } from "./shuffle.js";
 import { appendEntry } from "../../day-log.cjs";
 import type { DayLogEntry } from "../../day-log.cjs";
 import type { MealConfig, PickedMeal, StoreMenu } from "./types.js";
@@ -302,15 +303,20 @@ async function orderMeal(mealConfig: MealConfig, scheduledFor: Date, record: Par
     console.log(`[agent] ${searchMessage}...`);
     emit({ type: "status", message: searchMessage });
     let stores: { name: string; url: string }[] = [];
+    // A small pool of top results, shuffled: runs vary which restaurants get
+    // compared without wandering far down the results, and the extras double
+    // as fallbacks for slow stores.
+    const storePool = config.maxStores + 3;
     try {
-      stores = await bounded(findStores(page, config.searchQuery, Math.max(3, config.maxStores)),
+      stores = await bounded(findStores(page, config.searchQuery, storePool),
         Math.min(60000, Math.max(5000, searchDeadline - Date.now())), 'search / restaurant discovery');
     } catch (error) {
       assertConnected(activeBrowser);
       console.log(`[agent] First search failed (${error instanceof Error ? error.message.split('\n')[0] : error}); retrying once…`);
-      stores = await bounded(findStores(page, config.searchQuery || 'healthy', Math.max(3, config.maxStores)),
+      stores = await bounded(findStores(page, config.searchQuery || 'healthy', storePool),
         Math.min(45000, Math.max(5000, searchDeadline - Date.now())), 'search / restaurant discovery retry').catch(() => []);
     }
+    stores = shuffled(stores);
     if (stores.length === 0) {
       console.log('[agent] No stores found — offering an offline recommendation so the run still completes.');
       return presentRecommendationOnly(mealConfig, record, target, config.budgetPerMeal, plan.raw.preferences || {},

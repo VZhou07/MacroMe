@@ -24,7 +24,7 @@ const MIN_CART_BUDGET = 5;
 
 // How many restaurants to scrape per run. Each store costs a slow virtualized
 // menu scroll, so this trades breadth for run time.
-const DEFAULT_MAX_STORES = 1;
+const DEFAULT_MAX_STORES = 3;
 
 const DAY_KEYS = ["mon", "tue", "wed", "thu", "fri", "sat", "sun"] as const;
 export type DayKey = (typeof DAY_KEYS)[number];

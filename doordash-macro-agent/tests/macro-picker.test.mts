@@ -8,6 +8,8 @@ const meal = { name: 'Lunch', time: '12:00', macroShare: 0.5 };
 const macros = { calories: 2000, protein: 150, carbs: 200, fat: 60 };
 const nutrition = () => null;
 const sleep = async () => {};
+// Keep menu order fixed so the canned model replies below reference items the prompt contains.
+const shuffle = <T,>(items: readonly T[]) => [...items];
 
 test('smaller balanced prompt, three choices, capped output and no hidden retries', async (t) => {
   const old = process.env.MACROME_MODEL;
@@ -24,7 +26,7 @@ test('smaller balanced prompt, three choices, capped output and no hidden retrie
     assert.ok(prompt.includes('A / Meal') && prompt.includes('B / Meal'));
     return { choices: [{ message: { content: JSON.stringify(['0:0','1:0','0:1','1:1'].map(itemId => ({itemId, estimatedMacros:{calories:500,protein:40,carbs:50,fat:15},reasoning:'Fits'}))) } }] };
   } } } } as unknown as OpenAI;
-  const result = await pickMeals(menus, meal, macros, 20, '', {client,nutrition,sleep});
+  const result = await pickMeals(menus, meal, macros, 20, '', {client,nutrition,sleep,shuffle});
   assert.equal(result.picks.length, 3);
   assert.ok(result.picks.some(pick => pick.restaurant === 'B'));
   assert.equal(result.picks[0].itemId, '0', 'real menu IDs survive model prompt aliases');
@@ -33,7 +35,7 @@ test('smaller balanced prompt, three choices, capped output and no hidden retrie
 test('model timeout falls back to heuristic menu picks instead of failing the run', async () => {
   let calls=0;
   const client = { chat: { completions: { create: async () => { calls++; throw new Error('Request timed out.'); } } } } as unknown as OpenAI;
-  const result = await pickMeals(menus, meal, macros, 20, '', {client,nutrition,sleep});
+  const result = await pickMeals(menus, meal, macros, 20, '', {client,nutrition,sleep,shuffle});
   assert.equal(calls,2);
   assert.ok(result.picks.length >= 1);
   assert.match(result.picks[0].reasoning, /Picked .+ for ~/i);
@@ -42,7 +44,7 @@ test('model timeout falls back to heuristic menu picks instead of failing the ru
 test('rate-limit failures fall back after one attempt', async () => {
   let calls=0;
   const client = { chat: { completions: { create: async () => { calls++; throw Object.assign(new Error('Rate limit'),{status:429}); } } } } as unknown as OpenAI;
-  const result = await pickMeals(menus, meal, macros, 20, '', {client,nutrition,sleep});
+  const result = await pickMeals(menus, meal, macros, 20, '', {client,nutrition,sleep,shuffle});
   assert.equal(calls,1);
   assert.ok(result.picks.length >= 1);
 });
@@ -56,7 +58,7 @@ test('two-item meal uses combined price/macros and rejects mixed-store or over-b
     {items:[item('0:0'),item('1:0')],reasoning:'Invalid cross-store'},
     {items:[item('0:0'),item('0:0')],reasoning:'Invalid duplicate'},
   ])}}} as unknown as OpenAI;
-  const result=await pickMeals(menus,meal,macros,20,'Dairy-free',{client,nutrition,sleep});
+  const result=await pickMeals(menus,meal,macros,20,'Dairy-free',{client,nutrition,sleep,shuffle});
   assert.equal(result.picks.length,1);
   assert.equal(result.picks[0].components?.length,2);
   assert.equal(result.picks[0].price,20);
@@ -64,14 +66,14 @@ test('two-item meal uses combined price/macros and rejects mixed-store or over-b
   assert.equal(result.picks[0].estimatedMacros.protein,50);
   assert.match(result.debug.systemPrompt,/SUM of menu prices/);
   assert.match(result.debug.systemPrompt,/All components must obey dietary/);
-  const overBudget = await pickMeals(menus,meal,macros,15,'',{client,nutrition,sleep});
+  const overBudget = await pickMeals(menus,meal,macros,15,'',{client,nutrition,sleep,shuffle});
   assert.ok(overBudget.picks.length >= 1, 'over-budget model reply still yields heuristic picks');
 });
 
 test('empty model array falls back to heuristic picks', async () => {
   let calls=0;
   const client={chat:{completions:{create:async()=>{calls++;return {choices:[{message:{content:'[]'}}]};}}}} as unknown as OpenAI;
-  const result=await pickMeals(menus,meal,macros,20,'',{client,nutrition,sleep});
+  const result=await pickMeals(menus,meal,macros,20,'',{client,nutrition,sleep,shuffle});
   assert.equal(calls,1);
   assert.ok(result.picks.length >= 1);
 });

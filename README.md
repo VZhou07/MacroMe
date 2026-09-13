@@ -172,7 +172,7 @@ There is no “Claude Sonnet 5” id in this stack — use a current OpenRouter 
 
 | Variable | Default | Purpose |
 | --- | --- | --- |
-| `MACROME_MAX_STORES` | `1` | How many successful menus to compare (max 30) |
+| `MACROME_MAX_STORES` | `3` | How many successful menus to compare (max 30) |
 | `MACROME_SEARCH_BUDGET_SECONDS` | `240` | Total discovery + scrape budget (`120` for shorter demos) |
 | `MACROME_MAX_MENU_ITEMS` | `20` | Items sent to the picker across stores (max 60) |
 | `MACROME_SESSION_TIMEOUT_MINUTES` | `15` | Requested Steel browser lifetime (plan limits still apply) |
@@ -264,7 +264,7 @@ It reads the same files the dashboard does, so it reports whatever the app alrea
 
 At checkout, the dashboard and terminal list every scraped cart line, quantities, prices and available modifiers, alongside DoorDash's full checkout total. The recommended dish and its macros are labeled **Agent pick**. **Place order** approves the entire cart, including any leftovers. Unreadable carts stop approval; a changed cart or total after approval stops placement. Uncertain adds are inspected before further changes. Before approval, the model can recover by reducing quantities, removing cart lines, replacing the cart with a cheaper candidate (including another restaurant), or retrying inspection. Every edit uses verified cart controls and is followed by a fresh read. The actual checkout total must fit the saved all-in budget; if fees are excluded from the budget, the cart's food line totals must fit instead. Recovery stops after eight steps or four minutes and explains the unresolved problem without placing an order.
 
-For demos, the current default is one successfully scraped restaurant (`MACROME_MAX_STORES=1`); discovery keeps at least three restaurant links so a failed first store has fallbacks. Menus are read sequentially, capped at 20 items per store and 45 seconds per tab. `MACROME_SEARCH_BUDGET_SECONDS` sets the total discovery/scrape budget (default 240; try 120 for demos), with time reserved for checkout inside the Steel lifetime. Navigation gets two bounded attempts; unreadable menus are skipped and their tabs closed.
+By default MacroMe compares three successfully scraped restaurants (`MACROME_MAX_STORES=3`). Discovery collects a few more top results than that and shuffles them, so each run compares a different mix of nearby restaurants while the extras act as fallbacks; each menu's items are also shuffled before the picker sees them. Menus are read sequentially, capped at 20 items per store and 45 seconds per tab. `MACROME_SEARCH_BUDGET_SECONDS` sets the total discovery/scrape budget (default 240; try 120 for demos), with time reserved for checkout inside the Steel lifetime. Navigation gets two bounded attempts; unreadable menus are skipped and their tabs closed.
 
 `MACROME_MAX_MENU_ITEMS` caps the picker input across all restaurants (default 20, maximum 60), distributed across stores. It returns up to three meal choices, each containing one or two distinct items from one restaurant. Prices and estimated macros are summed; every selected component must be in the cart before approval. A partial add is inspected before retrying. Dietary constraints remain hard requirements; macro targets are approximate goals, not a promise of exact restaurant nutrition.
 
@@ -295,7 +295,7 @@ Full setup instructions are under **Setup** above. Short list:
 | `DIGEST_EMAIL` | to email | Recipient(s), comma-separated |
 | `MACROME_EMAIL_FROM` | no | Sender; needs a verified Resend domain for non-account inboxes |
 | `MACROME_SESSION_TIMEOUT_MINUTES` | no | Requested browser lifetime (default 15) |
-| `MACROME_MAX_STORES` | no | Successful menus to compare (default 1, max 30) |
+| `MACROME_MAX_STORES` | no | Successful menus to compare (default 3, max 30) |
 | `MACROME_SEARCH_BUDGET_SECONDS` | no | Discovery + menu budget (default 240) |
 | `MACROME_MAX_MENU_ITEMS` | no | Items sent to the picker (default 20, max 60) |
 | `MACROME_DIGEST_TIME` | no | EOD time `HH:MM` in plan timezone |

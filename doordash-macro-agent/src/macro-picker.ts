@@ -1,6 +1,7 @@
 import OpenAI from "openai";
 import { confidentReasoning, fallbackPicks } from "./fallback-picks.js";
 import { lookupNutrition } from "./nutrition.js";
+import { shuffled } from "./shuffle.js";
 import type { MacroGoals, MealConfig, MealMacros, PickedMeal, StoreMenu } from "./types.js";
 
 const openai = new OpenAI({
@@ -61,7 +62,12 @@ export async function pickMeals(
   // carries what the numeric targets can't: delivery context, cuisine
   // preferences and dietary constraints.
   brief = "",
-  dependencies = { client: openai, nutrition: lookupNutrition, sleep: (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms)) },
+  dependencies: {
+    client: OpenAI;
+    nutrition: typeof lookupNutrition;
+    sleep: (ms: number) => Promise<void>;
+    shuffle?: <T>(items: readonly T[]) => T[];
+  } = { client: openai, nutrition: lookupNutrition, sleep: (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms)) },
   signal?: AbortSignal,
 ): Promise<PickMealsResult> {
   const target = {
@@ -74,7 +80,9 @@ export async function pickMeals(
   const limit = Math.max(1, Math.min(60, Math.floor(Number(process.env.MACROME_MAX_MENU_ITEMS) || 20)));
   const lookup = new Map<string, { menu: StoreMenu; item: StoreMenu["items"][number] }>();
   // Round-robin across stores: a large first menu must not crowd out all others.
-  const eligible = menus.map((menu) => ({ menu, items: menu.items.filter((item) => item.price > 0 && item.price <= budgetPerMeal) }));
+  // Each menu is shuffled so the picker doesn't always see the same dishes.
+  const shuffle = dependencies.shuffle ?? shuffled;
+  const eligible = menus.map((menu) => ({ menu, items: shuffle(menu.items.filter((item) => item.price > 0 && item.price <= budgetPerMeal)) }));
   const lines: string[] = [];
   for (let index = 0; index < Math.max(0, ...eligible.map((entry) => entry.items.length)) && lookup.size < limit; index++) {
     for (const [storeIndex, { menu, items }] of eligible.entries()) {
