@@ -1,132 +1,180 @@
 # MacroMe
 
-A macro-aware DoorDash ordering agent with a web onboarding wizard and a live dashboard.
+MacroMe finds DoorDash meals that fit your macros, then waits for you to approve before anything gets charged.
 
-You set daily calorie/protein/carb/fat goals, meal times, budget, delivery preferences, and food constraints once. The agent searches DoorDash in a Steel cloud browser, reads menus, picks dishes that best match your macros for that meal, shows a live browser view, and waits for you to approve the full cart before anything is charged.
+You set calorie and macro goals, meal times, budget, delivery details, and food preferences once. After that, MacroMe looks at nearby restaurants, picks something that fits that meal’s targets, shows you the live cart, and waits for your OK. Leave it running and it’ll kick off scheduled meals when they’re due.
 
-**In one paragraph:** MacroMe helps gym-conscious builders hit macros via DoorDash with human approval. Today it runs locally 24/7 if you leave the process up, remembers progress in JSON across restarts, and gives non-devs a website while devs can script or (later) call an MCP server. As we scale, the UI and always-on backend grow up behind a real database; MCP remains the clean agent-facing API for developers who live in the terminal and IDE.
+## Who it’s for
 
-## Who it targets
+People who want DoorDash without hunting for high-protein (or otherwise on-target) meals every time. It’s a good fit if you’re okay leaving a small app running on your computer so orders can start on schedule.
 
-**Primary:** developers and technical builders who go to the gym and care about nutrients — people who already live in a terminal or IDE, want food that fits their macros without manually hunting DoorDash every meal, and are fine running a local always-on process for a hackathon or personal setup.
+Most of the time you’ll live in the website: onboarding, **Run now**, approving carts, and checking today’s progress plus past day summaries.
 
-**Also:** the same product has a website UI so non-developers (or devs who prefer a UI) can onboard, click Run now, approve orders, and later read end-of-day summaries without touching MCP or scripts.
-
-## How the two halves connect
-
-```
-ui/ (wizard)  ──POST /api/config──▶  macrome-config.json  ──▶  doordash-macro-agent/src/plan.ts
-                                     (the saved plan)              │
-                                                                   ├─▶ UserConfig   → menu scraping, budget filter
-                                                                   └─▶ brief (prose) → the meal-picker's LLM prompt
-```
-
-`macrome-config.json` is the source of truth. `plan.ts` validates it and derives:
-
-- a **structured config** the scraper uses (search query, per-cart budget, macro targets, days and order times), and
-- a **natural-language brief** injected into the meal-picker's system prompt, so details that don't fit in numbers — delivery time, address, drop-off, preferred cuisines, dietary constraints, ingredients to avoid — reach the model.
-
-Per-item macros come from LLM estimates and, when available, a local USDA SQLite nutrition database.
-
-## Why localhost right now
-
-Ordering needs a long-lived Node process, Steel browser sessions, secrets, and local persistent state. Serverless hosts (e.g. Vercel free) are a poor fit for multi-minute browser automation and a large local nutrition DB. For the hackathon and early product, running on your machine is the honest and reliable path.
-
-### Keep it “24/7” on your laptop
-
-1. Leave `npm run dev` (and/or the scheduler) running — do not close the terminal or suspend the machine if you want scheduled meals to fire.
-2. Open http://localhost:3000 for the wizard/dashboard.
-3. When the DoorDash/Steel login goes stale, re-run `setup-profile` / log in again in the live browser (sessions expire; relogin is expected).
-4. Devs who prefer the CLI can run agent/schedule scripts directly from the repo without living in the UI.
-
-The website process and any MCP server are separate. Keeping localhost:3000 up runs the app and (once cron lives in that process, or you also run the scheduler) the jobs. MCP is for IDE/agent tool calls, not a replacement for that always-on Node process.
-
-## Developers vs non-developers
-
-**Developers**
-
-- Clone the repo, install deps, set `.env` keys, join/build nutrition data, run `setup-profile` once, then `npm run dev` and/or schedule/agent scripts.
-- Easy path: run the documented scripts from the project root; keep the process open for automation.
-- Optional later: an MCP server so tools like “today’s macro summary” or “send/show EOD digest” can be called from Cursor (or any MCP client) via JSON-RPC — useful when agents need a standard way to reach MacroMe without importing our TypeScript. Devs can also just run a script; MCP is the agent-integration surface, not required for core use.
-
-**Non-developers (or UI-first users)**
-
-- Use the website: complete onboarding, see next scheduled orders, Run now, approve in the dashboard, watch the live browser.
-- End-of-day (and historical) summaries should appear on the website so they never need a terminal or MCP.
-
-## Persistent state (JSON “database” for now)
-
-We intentionally keep early persistence as JSON files on disk (gitignored where they hold personal data), not a hosted SQL database yet.
-
-Goals:
-
-- Survive restart: every `npm run dev` should still know what you already did — placed orders, fast-forwarded/completed queue items, and which meals are still coming up.
-- Same for digests: EOD summaries saved so previous days remain visible after restart.
-
-Examples already / planned:
-
-- `macrome-config.json` — your plan (macros, meals, preferences, schedule).
-- `macrome-queue-state.json` — completion history for the dated order queue so completed or fast-forwarded occurrences do not reappear as “next” after restart; upcoming ones still show.
-- Future day-log / digest JSON (or similar) — per-day meals, macros, spend, for dashboard history and optional email.
-
-This is our lightweight database until we scale.
-
-## How we plan to scale
-
-**Frontend:** evolve the wizard + dashboard (onboarding, live run, approvals, notifications, EOD history).
-
-**Backend:** always-on Node (or container) host — not serverless — for Steel sessions, cron, and long jobs (e.g. Railway, Fly, Render, or a VPS). Fold scheduling into the main server where it makes sense so one process owns “site + jobs.”
-
-**Database:** graduate from JSON files to a real database (orders, users, digests, queue) while keeping the same product semantics: persistence across restarts and clear history of what was ordered.
-
-**MCP server (for developers / agents):** expose MacroMe capabilities as MCP tools (JSON-RPC under the hood) so coding agents can call summary/digest helpers from the IDE without custom glue per editor. When larger, a 24/7 service with a real DB powers the app; MCP is how developer tools and agents plug into that platform — not what keeps the service online by itself.
-
-## Setup
+## Quick start
 
 ```bash
 npm install
 npm install --prefix doordash-macro-agent
-npm run join-nutrition-db --prefix doordash-macro-agent             # restore the bundled nutrition database
-cp doordash-macro-agent/.env.example doordash-macro-agent/.env   # add your keys
-npm run setup-profile                                            # log into DoorDash once
+npm run join-nutrition-db --prefix doordash-macro-agent
+cp doordash-macro-agent/.env.example doordash-macro-agent/.env
+# add your keys (see Setup below)
+npm run setup-profile    # log into DoorDash once in the live browser
+npm run dev              # open http://localhost:3000
 ```
 
-`setup-profile` opens a live browser you log into by hand, then saves a reusable Steel profile id into `.env`. Every later run reuses that login.
+1. Leave `npm run dev` running if you want scheduled meals to fire. Don’t close the terminal or put the machine to sleep.
+2. Open http://localhost:3000. Finish the setup wizard, or jump to the dashboard if you already have a plan.
+3. If DoorDash logs you out later, run `npm run setup-profile` again and update `STEEL_PROFILE_ID`.
 
-The bundled nutrition database is stored as three `nutrition.db.part-NN` files to keep each file below GitHub's file-size limit. The join command combines them in order into `doordash-macro-agent/data/nutrition.db`, which is gitignored. Run it after cloning or pulling updated chunks. No USDA download or database rebuild is needed. The agent uses matching food records for per-serving macros and falls back to model estimates when no match is found. Name matches and database serving sizes may differ from the actual restaurant dish and portion.
+## Using the dashboard
 
-## Running
+- **No plan yet:** the onboarding wizard walks you through macros, meals, budget, days, addresses, and food preferences.
+- **Plan saved:** the dashboard shows your plan, upcoming orders, **Run now**, and the live browser when a run is active. Open **/setup** anytime to edit the plan.
+
+**Run now** starts the next upcoming meal. Scheduled meals use the same flow at each meal’s order time. Nothing is charged until you press **Place order**, unless demo place mode is on (see below).
+
+### Today and end-of-day summary
+
+**Today** updates as meals get placed, declined, missed, or fail. You’ll see macro progress and each meal’s outcome.
+
+A **Final** day summary is saved automatically when:
+
+- the end-of-day time arrives (by default, about 90 minutes after your last meal), or
+- every planned meal for that day has been placed (for example 3 of 3).
+
+Earlier days show up under **Earlier days** and stick around after you restart. Empty days with no meal activity don’t get a Final.
+
+You’ll get notifications (toasts, and optional desktop alerts) when a run finishes, a digest is ready, or a meal was missed while you were away.
+
+### If you were offline
+
+If a meal’s order time already passed while MacroMe wasn’t running, it’s marked **missed**. That means it shows up in your day summary, not that it gets ordered late. MacroMe won’t place lunch at 4pm just because the laptop was asleep at 11:45.
+
+## Setup
+
+### Keys and login
+
+The app reads both:
+
+1. repo-root `.env`
+2. `doordash-macro-agent/.env` (this one wins if a key appears in both)
+
+Copy the example file and fill in real values. Don’t commit `.env` files.
+
+#### Required for live ordering
+
+| Variable | Where | What it’s for |
+| --- | --- | --- |
+| `STEEL_API_KEY` | `doordash-macro-agent/.env` | Cloud browser for DoorDash ([steel.dev](https://steel.dev)) |
+| `OPENROUTER_API_KEY` | `doordash-macro-agent/.env` | Chooses meals and helps with checkout ([openrouter.ai](https://openrouter.ai)) |
+| `STEEL_PROFILE_ID` | `doordash-macro-agent/.env` | Your saved DoorDash login from `npm run setup-profile` (paste the id it prints) |
+
+Without these three, you can still fill out the plan, but live ordering won’t work.
+
+#### Optional: email day summaries
+
+| Variable | Needed to send? | Notes |
+| --- | --- | --- |
+| `RESEND_API_KEY` | yes | From [resend.com](https://resend.com) |
+| `DIGEST_EMAIL` | yes | Where summaries go (comma-separate for more than one) |
+| `MACROME_EMAIL_FROM` | no | The default shared sender only delivers to your Resend account email until you verify a domain |
 
 ```bash
-npm run dev     # http://localhost:3000
+RESEND_API_KEY=re_...
+DIGEST_EMAIL=you@example.com
+# MACROME_EMAIL_FROM="MacroMe <digest@yourdomain.com>"
 ```
 
-- **No plan saved yet** → `/` serves the onboarding wizard.
-- **A plan exists** → `/` serves the dashboard: your plan, the next scheduled orders, a **Run now** button, and the agent's live browser in an iframe. `/setup` always reopens the wizard to edit the plan.
+#### Optional: a stronger meal-picking model
 
-**Run now** takes the next dated order from **Next scheduled orders**. Once the agent reports it placed, that occurrence is removed; future repetitions stay scheduled. Completion history is saved in the gitignored `macrome-queue-state.json`, survives server restarts, and is also checked by the scheduler. Declining, failing, or running in dry-run mode does not mark it complete.
+Meal picking goes through OpenRouter. To use Claude or another paid model, set an OpenRouter model id:
 
-At checkout, the dashboard and terminal list every scraped cart line, quantities, prices and available modifiers, alongside DoorDash's full checkout total. The recommended dish and its macros are labeled **Agent pick**. **Place order** approves the entire cart, including any leftovers. Unreadable carts stop approval; a changed cart or total after approval stops placement. Uncertain adds are inspected before further changes. Before approval, the model can recover by reducing quantities, removing cart lines, replacing the cart with a cheaper candidate (including another restaurant), or retrying inspection. Every edit uses verified cart controls and is followed by a fresh read. The actual checkout total must fit the saved all-in budget; if fees are excluded from the budget, the cart's food line totals must fit instead. Recovery stops after eight steps or four minutes and explains the unresolved problem without placing an order.
+```bash
+OPENROUTER_API_KEY=sk-or-...
+MACROME_MODEL=anthropic/claude-sonnet-4
+```
 
-Restaurant discovery scrolls the search results and compares up to 30 restaurants by default, with a four-minute search budget. `MACROME_MAX_STORES` can set a cap between 1 and 30. Slow or unreadable menus are skipped so other restaurants can still be considered.
+The free default costs nothing. Paid models usually land at only cents per meal for MacroMe’s short requests. Current ids are listed at [openrouter.ai/anthropic](https://openrouter.ai/anthropic).
 
-Development checks: `npm test` covers the order queue and server behavior; `npm run test:checkout --prefix doordash-macro-agent` exercises checkout and the dashboard in local Chromium. The latter requires a Playwright Chromium install and its system libraries; `CHROMIUM_PATH` can select an existing executable. `npm run test:recovery --prefix doordash-macro-agent` tests budget enforcement, validated model actions, restaurant replacement and bounded retries.
+#### Optional tuning
 
-| Command | What it does |
+| Variable | Default | What it does |
+| --- | --- | --- |
+| `MACROME_MAX_STORES` | `3` | How many restaurant menus to compare (max 30) |
+| `MACROME_SEARCH_BUDGET_SECONDS` | `240` | How long discovery may take (`120` for a shorter demo) |
+| `MACROME_MAX_MENU_ITEMS` | `20` | How many dishes the picker sees (max 60) |
+| `MACROME_SESSION_TIMEOUT_MINUTES` | `15` | Browser session length (your Steel plan may cap this) |
+| `MACROME_DIGEST_TIME` | last meal + 90m | End-of-day time as `HH:MM` in your plan timezone |
+| `MACROME_DEMO_PLACE` | on | Demo mode: **Place order** counts as placed without charging DoorDash. Set `0` for real checkout |
+| `MACROME_DRY_RUN` | unset | `1` = practice mode with a mock menu, no live browser |
+| `MACROME_NO_CRON` | unset | `1` = this process won’t run the schedule clock |
+| `PORT` | `3000` | Website port |
+
+Browser sessions usually last up to **15 minutes** on Steel’s Launch plan. Longer needs a higher plan. MacroMe opens a session for each run and closes it when finished.
+
+Nutrition data ships as split files. After you clone, run `npm run join-nutrition-db --prefix doordash-macro-agent` to build the local database. Estimates are approximate, since restaurant portions vary.
+
+## Approving an order
+
+When a cart is ready you’ll see every line, prices, and DoorDash’s checkout total. The suggested dish is labeled **Agent pick**. **Place order** confirms the whole cart. **Don’t order** cancels that attempt without charging.
+
+In demo place mode (the hackathon default), approving records the meal as placed for Today and digests without a real DoorDash charge. Set `MACROME_DEMO_PLACE=0` when you want real payment checks.
+
+## Your data on disk
+
+Your plan and history live in local files. Personal ones stay out of git:
+
+| File | Contents |
 | --- | --- |
-| `npm run dev` | Web wizard + dashboard |
-| `npm run agent` | One ordering run in the terminal (approval is a yes/no prompt) |
-| `npm run schedule` | Cron loop that fires each meal at its order time |
-| `MACROME_DRY_RUN=1 npm run dev` | Dashboard runs against a mock menu, no browser, no order |
+| `macrome-config.json` | Your plan (macros, meals, budget, addresses, preferences) |
+| `macrome-queue-state.json` | Which scheduled slots are done, missed, or already tried |
+| `macrome-day-log.json` | What happened each meal |
+| `macrome-digests.json` | Saved day summaries |
+| `macrome-scheduler.lock` | Makes sure only one clock is running |
 
-## Environment
+Upcoming orders are calculated from your plan each minute. After a restart, MacroMe still knows what you already completed or missed.
 
-| Variable | Purpose |
+## Commands
+
+| Command | What you get |
 | --- | --- |
-| `STEEL_API_KEY` | Steel remote browser |
-| `OPENROUTER_API_KEY` | The model that picks the meal |
-| `STEEL_PROFILE_ID` | Saved DoorDash login, written by `setup-profile` |
-| `MACROME_CONFIG` | Override the plan file path |
-| `MACROME_MAX_STORES` | Restaurants to compare per run (default 30, max 30) |
+| `npm run dev` | Website + schedule clock at http://localhost:3000 |
+| `npm run agent` | One order from the terminal |
+| `npm run schedule` | Schedule clock alone (only if you don’t want it inside `dev`) |
+| `npm run setup-profile` | One-time DoorDash login for the cloud browser |
+| `npm run seed-demo -- --digest` | Sample day data for trying the summary UI |
+| `MACROME_DRY_RUN=1 npm run dev` | Dashboard practice mode, no live order |
 
-`macrome-config.json` holds your home address and is gitignored.
+## Optional: ask MacroMe from your coding app
+
+If you use Cursor, Claude Code, or Codex, you can hook up the optional MacroMe tools (`get_today_summary`, `list_digests`, `send_eod_digest`) with:
+
+| App | Config |
+| --- | --- |
+| Cursor | `.cursor/mcp.json` |
+| Claude Code | `.mcp.json` |
+| Codex | `.codex/config.toml` (project must be trusted) |
+
+```bash
+npm run mcp
+```
+
+Totally optional. The website and schedule work fine without it.
+
+## Environment quick reference
+
+| Variable | Required? | Purpose |
+| --- | --- | --- |
+| `STEEL_API_KEY` | for live orders | Cloud browser |
+| `OPENROUTER_API_KEY` | for live orders | Meal picking |
+| `STEEL_PROFILE_ID` | for live orders | Saved DoorDash login |
+| `MACROME_MODEL` | no | OpenRouter model id (default: free) |
+| `RESEND_API_KEY` / `DIGEST_EMAIL` | to email | Day summary email |
+| `MACROME_EMAIL_FROM` | no | Email sender |
+| `MACROME_DEMO_PLACE` | no | Demo place without charging (default on; `0` = real checkout) |
+| `MACROME_MAX_STORES` | no | Restaurants to compare |
+| `MACROME_SEARCH_BUDGET_SECONDS` | no | Discovery time budget |
+| `MACROME_MAX_MENU_ITEMS` | no | Dishes sent to the picker |
+| `MACROME_DIGEST_TIME` | no | End-of-day time |
+| `MACROME_DRY_RUN` | no | Mock run |
+| `PORT` | no | Website port (default 3000) |

@@ -1,18 +1,19 @@
 import type { Page } from "playwright-core";
 import type { CheckoutSummary, MenuItem, StoreMenu } from "./types.js";
 
+import { assertConnected, bounded, BrowserUnavailableError, navigate } from "./browser-work.js";
+
 const BASE = "https://www.doordash.com";
 // Long menus are memory-heavy to scroll; this many in-budget items is plenty to pick from.
-const MAX_ITEMS_PER_STORE = 60;
+const MAX_ITEMS_PER_STORE = 20;
 
 // Background tabs are throttled and DoorDash's virtualized menu never renders
 // in them, so focus the tab first. bringToFront has no timeout and has hung
 // indefinitely on Steel's remote browser, so don't wait on it forever.
 function focus(page: Page): Promise<void> {
-  return Promise.race([
-    page.bringToFront().catch(() => {}),
-    new Promise<void>((resolve) => setTimeout(resolve, 3000)),
-  ]);
+  return bounded(page.bringToFront(), 3000, 'focus tab').catch(() => {
+    console.log('[browser] focus tab: did not finish in 3 seconds; continuing with bounded page work.');
+  });
 }
 
 function parsePrice(text: string): number {
@@ -21,8 +22,9 @@ function parsePrice(text: string): number {
 }
 
 export async function findStores(page: Page, query: string, max: number): Promise<{ name: string; url: string }[]> {
-  await page.goto(`${BASE}/search/store/${encodeURIComponent(query)}/`, { waitUntil: "domcontentloaded", timeout: 30000 });
-  await page.waitForSelector('a[href*="/store/"]', { timeout: 20000 });
+  const term = query.trim();
+  const url = term ? `${BASE}/search/store/${encodeURIComponent(term)}/` : `${BASE}/`;
+  await navigate(page, url, 'a[href*="/store/"]', `search / ${term || 'browse restaurants'}`);
   await page.waitForTimeout(2000);
 
   const stores = new Map<string, { name: string; url: string }>();
@@ -43,7 +45,10 @@ export async function findStores(page: Page, query: string, max: number): Promis
     // so cut the name off where the rating starts.
     const name = text.split("\n")[0].replace(/\d\.\d.*$/, "").trim();
     if (!name) continue;
-    if (!stores.has(id)) stores.set(id, { name, url: `${BASE}/store/${id}/` });
+    // Keep DoorDash's full store path (slug + id). A bare /store/<id>/ often
+    // redirects slowly or lands on a shell without menu cards.
+    const clean = href.split(/[?#]/)[0].replace(/\/?$/, "/");
+    if (!stores.has(id)) stores.set(id, { name, url: clean.startsWith("http") ? clean : `${BASE}${clean}` });
     if (stores.size >= max) break;
   }
   stagnant = stores.size === before ? stagnant + 1 : 0;
@@ -57,22 +62,32 @@ export async function findStores(page: Page, query: string, max: number): Promis
 
 export async function scrapeMenu(page: Page, store: { name: string; url: string }, budget: number): Promise<StoreMenu> {
   await focus(page);
-  await page.goto(store.url, { waitUntil: "domcontentloaded", timeout: 30000 });
-  await page.waitForSelector('[data-testid="MenuItem"]', { timeout: 20000 }).catch(() => {});
+  // Menu cards are virtualized and often missing until the store shell paints.
+  // Wait for the store header OR a menu card, then scroll until cards appear —
+  // same pattern addItemToCart already uses successfully.
+  await navigate(
+    page,
+    store.url,
+    ['[data-testid="MenuItem"]', '[data-testid="storeInfo"]', '[data-testid="StoreMenuItemPrice"]'],
+    `${store.name} / menu`,
+    { attemptMs: 35000 },
+  );
 
-  // The menu is virtualized, so collect items while scrolling rather than
-  // reading the DOM once at the end.
   const items = new Map<string, MenuItem>();
   let stagnant = 0;
-  for (let i = 0; i < 40 && stagnant < 4 && items.size < MAX_ITEMS_PER_STORE; i++) {
+  let sawCard = false;
+  for (let i = 0; i < 28 && stagnant < 4 && items.size < MAX_ITEMS_PER_STORE; i++) {
     const batch = await page.$$eval('[data-testid="MenuItem"]', (els) =>
       els.map((el) => ({
         id: el.getAttribute("data-item-id") ?? "",
-        name: el.querySelector('[data-telemetry-id="storeMenuItem.title"]')?.textContent?.trim() ?? "",
+        name: el.querySelector('[data-telemetry-id="storeMenuItem.title"]')?.textContent?.trim()
+          ?? el.querySelector('[data-testid="StoreMenuItemName"]')?.textContent?.trim()
+          ?? "",
         description: el.querySelector('[data-telemetry-id="storeMenuItem.subtitle"]')?.textContent?.trim() ?? "",
         priceText: el.querySelector('[data-testid="StoreMenuItemPrice"]')?.textContent ?? "",
       }))
-    );
+    ).catch(() => [] as { id: string; name: string; description: string; priceText: string }[]);
+    if (batch.length) sawCard = true;
     const before = items.size;
     for (const b of batch) {
       const price = parsePrice(b.priceText);
@@ -80,8 +95,15 @@ export async function scrapeMenu(page: Page, store: { name: string; url: string 
       items.set(b.id, { id: b.id, name: b.name, description: b.description.slice(0, 200), price });
     }
     stagnant = items.size === before ? stagnant + 1 : 0;
-    await page.mouse.wheel(0, 1200);
-    await page.waitForTimeout(600);
+    await page.mouse.wheel(0, 1400);
+    await page.waitForTimeout(700);
+  }
+
+  if (!sawCard) {
+    const title = await page.title().catch(() => "");
+    const href = page.url();
+    console.log(`[doordash] ${store.name}: no MenuItem cards after scroll (title=${JSON.stringify(title)} url=${href})`);
+    throw new Error(`${store.name}: menu cards never appeared (possible login wall or empty store page)`);
   }
 
   return { store: store.name, url: store.url, items: [...items.values()] };
@@ -176,14 +198,7 @@ export async function addItemToCart(page: Page, storeUrl: string, itemId: string
 
   // Full menu cards only render once scrolled past the featured carousel, so
   // wait for the store header and let the scroll loop below find the card.
-  // Store pages occasionally stall on first load, so allow one retry.
-  let loaded = false;
-  for (let attempt = 0; attempt < 2 && !loaded; attempt++) {
-    await page.goto(storeUrl, { waitUntil: "domcontentloaded", timeout: 30000 }).catch(() => {});
-    loaded = await page.waitForSelector('[data-testid="storeInfo"]', { state: "attached", timeout: 20000 }).then(() => true).catch(() => false);
-    if (!loaded) console.log(`[doordash] store header missing on load attempt ${attempt + 1}`);
-  }
-  if (!loaded) return { ok: false, reason: "store-page-failed" };
+  await navigate(page, storeUrl, '[data-testid="storeInfo"]', `cart / ${storeUrl}`);
   if (await sessionEndedVisible(page)) return { ok: false, reason: "session-ended" };
 
   const before = await cartCount(page);
@@ -280,6 +295,8 @@ function appears(page: Page, selector: string, timeout: number): Promise<boolean
 // is a 404 without the order_cart_id the Continue link carries.
 // Returns the actual checkout contents and Place Order total, or null if navigation fails.
 export async function goToCheckout(page: Page): Promise<CheckoutSummary | null> {
+  assertConnected(page.context().browser());
+  if (await sessionEndedVisible(page)) throw new BrowserUnavailableError('Steel session ended during checkout. Start a new run.');
   await focus(page);
   const alreadyAtCheckout = await page.locator('[data-testid="PlaceOrderButton"]').first().isVisible().catch(() => false);
   if (!alreadyAtCheckout) {
@@ -443,7 +460,20 @@ export async function clearCart(page: Page, expected: CheckoutSummary): Promise<
   console.log('[cart] Cleared the current cart before replacing the meal.');
 }
 
+/**
+ * Hackathon demo mode: an approved order counts as placed without charging.
+ * On by default; set MACROME_DEMO_PLACE=0 for real checkout.
+ */
+export function demoPlaceEnabled(): boolean {
+  return !/^(?:0|false|off|no)$/i.test(String(process.env.MACROME_DEMO_PLACE ?? '').trim());
+}
+
 export async function placeOrder(page: Page, approvedCheckout: CheckoutSummary): Promise<boolean> {
+  if (demoPlaceEnabled()) {
+    console.log('[doordash] MACROME_DEMO_PLACE: treating Place Order as successful without charging.');
+    await page.waitForTimeout(800).catch(() => {});
+    return true;
+  }
   if (!(await appears(page, '[data-testid="PlaceOrderButton"]', 10000))) return false;
   const current = await readCheckout(page);
   if (JSON.stringify(current) !== JSON.stringify(approvedCheckout)) {

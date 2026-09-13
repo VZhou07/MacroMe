@@ -36,18 +36,27 @@ export function printCartSummary(checkout: CheckoutSummary): void {
  * agent blocks here until a person answers, so nothing is ever charged without
  * an explicit approval.
  */
-export async function promptApproval(): Promise<boolean> {
-  return eventsEnabled() ? awaitWebApproval() : awaitTerminalApproval();
+export async function promptApproval(signal?: AbortSignal): Promise<boolean> {
+  return eventsEnabled() ? awaitWebApproval(signal) : awaitTerminalApproval(signal);
 }
 
-function awaitTerminalApproval(): Promise<boolean> {
+function awaitTerminalApproval(signal?: AbortSignal): Promise<boolean> {
   const rl = createInterface({ input: process.stdin, output: process.stdout });
   return new Promise((resolve) => {
-    rl.question("  Place the entire cart at the checkout total above? (yes/no): ", (answer) => {
+    let settled = false;
+    const abort = () => finish(false);
+    const finish = (approved: boolean) => {
+      if (settled) return;
+      settled = true;
+      signal?.removeEventListener('abort', abort);
       rl.close();
       releaseStdin();
-      resolve(answer.trim().toLowerCase() === "yes");
-    });
+      resolve(approved);
+    };
+    rl.on('close', abort);
+    signal?.addEventListener('abort', abort, { once: true });
+    if (signal?.aborted) { abort(); return; }
+    rl.question("  Place the entire cart at the checkout total above? (yes/no): ", (answer) => finish(answer.trim().toLowerCase() === 'yes'));
   });
 }
 
@@ -56,23 +65,28 @@ function awaitTerminalApproval(): Promise<boolean> {
 // would never exit after approving. Pausing and unreffing releases it.
 function releaseStdin(): void {
   process.stdin.pause();
-  process.stdin.unref();
+  process.stdin.unref?.();
 }
 
-function awaitWebApproval(): Promise<boolean> {
+function awaitWebApproval(signal?: AbortSignal): Promise<boolean> {
   console.log("  Waiting for approval in the MacroMe dashboard...");
   const rl = createInterface({ input: process.stdin });
   return new Promise((resolve) => {
     // rl.close() emits "close" synchronously, so the decline fallback below
     // would otherwise beat a real decision to the resolve.
     let settled = false;
+    const abort = () => finish(false);
     const finish = (approved: boolean) => {
       if (settled) return;
       settled = true;
+      signal?.removeEventListener('abort', abort);
       rl.close();
       releaseStdin();
       resolve(approved);
     };
+
+    signal?.addEventListener('abort', abort, { once: true });
+    if (signal?.aborted) { abort(); return; }
 
     rl.on("line", (line) => {
       const text = line.trim();

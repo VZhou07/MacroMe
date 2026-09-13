@@ -1,4 +1,5 @@
 import Steel from "steel-sdk";
+import { createSession } from "./session.js";
 import { printLiveView } from "./live-view.js";
 
 const client = new Steel({ steelAPIKey: process.env.STEEL_API_KEY });
@@ -6,7 +7,7 @@ const client = new Steel({ steelAPIKey: process.env.STEEL_API_KEY });
 let sessionId: string | null = null;
 
 export async function startSession(profileId: string): Promise<string> {
-  const session = await client.sessions.create({
+  const session = await createSession(client, {
     useProxy: false,
     profileId,
     persistProfile: false,

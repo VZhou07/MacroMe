@@ -1,0 +1,7 @@
+# Project-scoped Codex MCP (loaded when this project is trusted).
+# Points at the same MacroMe stdio server as Cursor and Claude Code.
+
+[mcp_servers.macrome]
+command = "node"
+args = ["mcp-server.cjs"]
+cwd = ".."

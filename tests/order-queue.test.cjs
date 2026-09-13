@@ -6,6 +6,8 @@ const path = require('node:path');
 const vm = require('node:vm');
 const { EventEmitter } = require('node:events');
 const queue = require('../order-queue.cjs');
+const dayLog = require('../day-log.cjs');
+const digests = require('../digest.cjs');
 
 const plan = {
   timezone: 'America/Toronto', days: ['sat', 'sun'], orderLeadMinutes: 45,
@@ -36,19 +38,24 @@ test('honors timezone, DST and lead times crossing midnight', () => {
   assert.deepEqual(queue.upcomingOrders({ ...plan, schedule: [] }, new Set()), []);
 });
 
-test('Run now uses the queue; failures stay queued; success persists across server restarts', async () => {
+test('Run now uses the queue; attempts stay consumed; success persists across server restarts', async () => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'macrome-queue-test-'));
   const configFile = path.join(dir, 'plan.json');
   const stateFile = path.join(dir, 'queue.json');
+  const logFile = path.join(dir, 'day-log.json');
+  const digestFile = path.join(dir, 'digests.json');
   const config = { ...plan, days: ['sun', 'mon', 'tue', 'wed', 'thu', 'fri', 'sat'], schedule: [] };
   for (const day of config.days) config.schedule.push({ day, meal: 'Lunch', time: '12:00', addressId: 'home' });
   fs.writeFileSync(configFile, JSON.stringify(config));
   function server() {
     let child;
     let args;
+    const root = path.resolve(__dirname, '..');
     const sandbox = {
-      __dirname: path.resolve(__dirname, '..'), console: { log() {} },
-      process: { env: { MACROME_CONFIG: configFile } },
+      __dirname: root, console: { log() {}, error() {} },
+      // MACROME_NO_CRON keeps the in-process clock out of the way: this test is
+      // about Run now and restarts, and tests/scheduler-core covers the cron.
+      process: { env: { MACROME_CONFIG: configFile, MACROME_NO_CRON: '1' }, pid: process.pid, once() {}, on() {} },
       require(name) {
         if (name === 'http') return { createServer: () => ({ listen() {} }) };
         if (name === 'child_process') return { spawn(command, argv) {
@@ -58,10 +65,21 @@ test('Run now uses the queue; failures stay queued; success persists across serv
           child.stdin = { write() {} }; return child;
         } };
         if (name === './order-queue.cjs') return {
-          upcomingOrders: (p) => queue.upcomingOrders(p, queue.readCompleted(stateFile)),
+          upcomingOrders: (p) => queue.upcomingOrders(p, queue.readExcluded(stateFile)),
+          markAttempted: (id) => queue.markAttempted(id, stateFile),
           markCompleted: (id) => queue.markCompleted(id, stateFile),
         };
-        return require(name);
+        // The state modules take their file per call; bind them to this test's
+        // temp directory so the routes never touch the real ones.
+        if (name === './day-log.cjs') return { ...dayLog, entriesForDate: (date) => dayLog.entriesForDate(date, logFile) };
+        if (name === './digest.cjs') return {
+          ...digests,
+          getDigest: (date) => digests.getDigest(date, digestFile),
+          listDigests: () => digests.listDigests(digestFile),
+          generateDigest: (plan, date) => digests.generateDigest(plan, date, { file: digestFile, dayLogFile: logFile }),
+        };
+        // Relative requires resolve against this test file otherwise.
+        return require(name.startsWith('./') ? path.join(root, name) : name);
       },
     };
     vm.runInNewContext(fs.readFileSync(path.resolve(__dirname, '../server.js'), 'utf8') + '\nglobalThis.api = { routes, handleEvent };', sandbox);
@@ -76,6 +94,8 @@ test('Run now uses the queue; failures stay queued; success persists across serv
         return result;
       },
       finish(placed) { sandbox.api.handleEvent({ type: 'result', placed, message: 'test' }); child.emit('close', 0); },
+      event(value) { sandbox.api.handleEvent(value); },
+      exit(code) { child.emit('close', code); },
       get args() { return args; },
     };
   }
@@ -86,15 +106,52 @@ test('Run now uses the queue; failures stay queued; success persists across serv
     assert.equal(started.body.scheduledOrder.id, original.id);
     assert.equal(started.body.meal, 'Lunch');
     assert.ok(app.args.includes('--scheduled-for'));
+    assert.equal(app.args[app.args.indexOf('--occurrence') + 1], original.id, 'the agent is told which occurrence it is running');
     assert.equal((await app.request('POST /api/run')).status, 409);
     app.finish(false);
-    assert.equal((await app.request('GET /api/run')).body.upcoming[0].id, original.id);
+    assert.notEqual((await app.request('GET /api/run')).body.upcoming[0].id, original.id);
     await app.request('POST /api/run');
     app.finish(true);
     assert.notEqual((await app.request('GET /api/run')).body.upcoming[0].id, original.id);
     const restarted = server();
     assert.notEqual((await restarted.request('GET /api/run')).body.upcoming[0].id, original.id);
     assert.equal(queue.readCompleted(stateFile).size, 1);
+
+    // Digests: today is live until it is written, then final and in the history.
+    config.macros = { calories: 2000, protein: 150, carbs: 200, fat: 60 };
+    config.meals = [{ name: 'Lunch', time: '12:00' }];
+    fs.writeFileSync(configFile, JSON.stringify(config));
+    const app2 = server();
+    const today = digests.today(config);
+    dayLog.appendEntry({
+      id: 'x', meal: 'Lunch', status: 'placed', timezone: config.timezone, date: today,
+      pick: { item: 'Bowl', restaurant: 'Kitchen', price: 12, macros: { calories: 800, protein: 55, carbs: 70, fat: 18 } },
+      checkoutTotal: '$19.10',
+    }, logFile);
+
+    const live = (await app2.request('GET /api/digests')).body;
+    assert.equal(live.final, false);
+    assert.equal(live.today.counts.placed, 1);
+    assert.equal(live.today.totals.protein, 55);
+    assert.equal(live.digestTime, '13:30', 'the last meal plus the buffer');
+
+    assert.equal((await app2.request('POST /api/digests')).body.date, today);
+    const written = (await app2.request('GET /api/digests')).body;
+    assert.equal(written.final, true, 'a written digest is served instead of the live one');
+    assert.equal(written.today.spend.amount, 19.1);
+    assert.ok(!written.history.some((entry) => entry.date === today), 'today is never also in the history');
+    assert.ok((await app2.request('GET /api/run')).body.notifications.some((note) => note.kind === 'digest'));
+
+    await app2.request('POST /api/run');
+    app2.event({ type: 'approval-request', cartItems: [{ name: 'Bowl' }], checkoutTotal: '$19.10' });
+    const decisions = await Promise.all([
+      app2.request('POST /api/run/approve', { approve: true }),
+      app2.request('POST /api/run/approve', { approve: true }),
+    ]);
+    assert.deepEqual(decisions.map((response) => response.status).sort(), [200, 409]);
+    app2.exit(1);
+    assert.equal((await app2.request('GET /api/run')).body.status, 'error', 'an exit while placing cannot leave a permanent spinner');
+
   } finally {
     fs.rmSync(dir, { recursive: true });
   }

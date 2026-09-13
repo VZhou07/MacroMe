@@ -2,6 +2,8 @@ import type { Page } from 'playwright-core';
 import type { CheckoutSummary, PickedMeal } from './types.js';
 import { addItemToCart, clearCart, editCartLine, goToCheckout } from './doordash.js';
 import { cartCost, decideRecovery } from './recovery.js';
+import { addMealToCart, cartContainsMeal } from './meal-components.js';
+import { BrowserUnavailableError } from './browser-work.js';
 import { emit } from './events.js';
 
 export async function prepareCheckout(page: Page, initialPick: PickedMeal, candidates: PickedMeal[], options: {
@@ -17,11 +19,12 @@ export async function prepareCheckout(page: Page, initialPick: PickedMeal, candi
       cart = await dependencies.inspect(page);
       if (!cart) throw new Error('Checkout navigation did not finish');
       const cost = cartCost(cart, options.includesFees);
-      const containsPick = cart.cartItems.some((line) => line.name.toLowerCase() === picked.item.toLowerCase());
+      const containsPick = cartContainsMeal(cart, picked);
       if (cost <= options.budget && containsPick) return { checkout: cart, picked };
-      problem = !containsPick ? 'The recommended dish is no longer in the cart. Replace with a suitable candidate.'
+      problem = !containsPick ? 'One or more components of the recommended meal are missing. Replace the cart with a complete suitable candidate.'
         : `Cart costs ${cost.toFixed(2)}, above the ${options.budget.toFixed(2)} ${options.includesFees ? 'all-in' : 'food'} budget.`;
     } catch (error) {
+      if (error instanceof BrowserUnavailableError) throw error;
       problem = String(error).split('\n')[0];
     }
     const action = await dependencies.decide({ ...options, cart, candidates, problem, history });
@@ -37,7 +40,7 @@ export async function prepareCheckout(page: Page, initialPick: PickedMeal, candi
         if (!cart || !candidates[action.candidate]) throw new Error('Invalid replacement');
         const replacement = candidates[action.candidate];
         await dependencies.clear(page, cart);
-        const result = await dependencies.add(page, replacement.storeUrl, replacement.itemId);
+        const result = await addMealToCart(page, replacement, dependencies.add);
         // An ambiguous add is inspected on the next iteration, never blindly repeated.
         picked = replacement;
         if (!result.ok) throw new Error(`Replacement add: ${result.reason}`);
@@ -47,6 +50,7 @@ export async function prepareCheckout(page: Page, initialPick: PickedMeal, candi
       }
       history.push(`${JSON.stringify(action)}: executed; inspect fresh cart next`);
     } catch (error) {
+      if (error instanceof BrowserUnavailableError) throw error;
       history.push(`${JSON.stringify(action)} failed: ${String(error).split('\n')[0]}`);
     }
   }

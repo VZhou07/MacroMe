@@ -7,7 +7,7 @@
   <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'><circle cx='8' cy='8' r='7' fill='%23E0562F'/></svg>">
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-  <link href="https://fonts.googleapis.com/css2?family=DM+Sans:opsz,wght@9..40,400;9..40,500;9..40,700&family=Fraunces:opsz,wght@9..144,600;9..144,700&display=swap" rel="stylesheet">
+  <link href="https://fonts.googleapis.com/css2?family=DM+Sans:opsz,wght@9..40,400;9..40,500;9..40,700&family=Fraunces:opsz,wght@9..144,600;9..144,700&display=swap" rel="stylesheet" media="print" onload="this.media='all'">
   <link rel="stylesheet" href="styles.css">
 </head>
 <body>
@@ -27,6 +27,7 @@
       </div>
       <div class="dash-actions">
         <span id="nextOrderLabel">Loading next order…</span>
+        <button type="button" class="btn btn-ghost btn-small" id="alerts">Desktop alerts</button>
         <button type="button" class="btn btn-primary" id="runNow">Run now</button>
         <button type="button" class="btn btn-ghost" id="stopRun" hidden>Stop</button>
       </div>
@@ -69,12 +70,37 @@
       <pre id="logOut"></pre>
     </details>
 
+    <!-- Today so far, and the saved end-of-day summary once it is written. -->
+    <section class="card" id="todayCard">
+      <div class="summary-head">
+        <div>
+          <h3 id="todayTitle">Today</h3>
+          <p class="summary-line" id="todaySummary">Loading today…</p>
+        </div>
+        <div class="summary-actions">
+          <span class="tag" id="todayTag">Live</span>
+          <button type="button" class="btn btn-ghost btn-small" id="summarise" disabled aria-describedby="finalizeHelp">Save today’s digest (finalize)</button>
+        </div>
+      </div>
+      <p class="hint" id="finalizeHelp">Final digests are saved automatically when due if a meal outcome has been logged.</p>
+      <div class="meters" id="todayMeters"></div>
+      <p class="meter-note">Macro totals cover the agent pick in each placed order, not every line in the cart.</p>
+      <ul class="day-meals" id="todayMeals"></ul>
+      <p class="day-empty" id="todayEmpty" hidden>Nothing has run today yet. Placed, declined and missed meals appear here.</p>
+    </section>
+
     <section class="card upcoming-card">
       <span class="field-title">Next scheduled orders</span>
       <ul class="upcoming" id="upcoming"></ul>
     </section>
+
+    <section class="card" id="historyCard" hidden>
+      <span class="field-title">Earlier days</span>
+      <ul class="history" id="history"></ul>
+    </section>
   </main>
 </div>
+<div class="toasts" id="toasts" aria-live="polite"></div>
 <script src="dashboard.js"></script>
 </body>
 </html>
