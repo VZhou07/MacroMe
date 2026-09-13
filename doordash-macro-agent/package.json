@@ -8,7 +8,8 @@
     "schedule": "tsx src/scheduler.ts",
     "setup-profile": "tsx src/setup-profile.ts",
     "save-recording": "tsx src/save-recording.ts",
-    "build-nutrition-db": "tsx scripts/build-nutrition-db.ts"
+    "build-nutrition-db": "tsx scripts/build-nutrition-db.ts",
+    "join-nutrition-db": "tsx scripts/join-nutrition-db.ts"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.39.0",
