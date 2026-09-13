@@ -23,11 +23,10 @@
     <header class="dash-head">
       <div>
         <h2 id="dashTitle">Your agent is ready.</h2>
-        <p class="lede" id="dashSub">Pick a meal and it will order it on DoorDash for you.</p>
+        <p class="lede" id="dashSub">Run now orders the next scheduled meal. Completed orders leave the queue.</p>
       </div>
       <div class="dash-actions">
-        <label class="sr-only" for="mealPick">Meal to order</label>
-        <select id="mealPick"></select>
+        <span id="nextOrderLabel">Loading next order…</span>
         <button type="button" class="btn btn-primary" id="runNow">Run now</button>
         <button type="button" class="btn btn-ghost" id="stopRun" hidden>Stop</button>
       </div>
@@ -42,7 +41,7 @@
 
     <!-- Approval: the agent blocks at checkout until one of these is clicked. -->
     <section class="card approval" id="approval" hidden>
-      <h3>Approve this order?</h3>
+      <h3>Approve this entire cart?</h3>
       <div class="approval-body" id="approvalBody"></div>
       <div class="nav">
         <button type="button" class="btn btn-ghost" id="reject">Don't order</button>

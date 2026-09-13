@@ -9,7 +9,7 @@
     "agent": "npm start --prefix doordash-macro-agent",
     "schedule": "npm run schedule --prefix doordash-macro-agent",
     "setup-profile": "npm run setup-profile --prefix doordash-macro-agent",
-    "test": "echo \"Error: no test specified\" && exit 1"
+    "test": "node --test tests/*.test.cjs"
   },
   "repository": {
     "type": "git",

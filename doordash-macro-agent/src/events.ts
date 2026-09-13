@@ -3,11 +3,13 @@
 // Normal human-readable logging still goes to stdout untouched; these lines are
 // prefixed so the server can pick them out and ignore everything else. Used
 // only when the agent runs under `--web`.
+import type { CartLine } from "./types.js";
+
 export type AgentEvent =
   | { type: "status"; message: string }
   | { type: "live-view"; url: string; dashboardUrl: string; sessionId: string }
   | { type: "picked"; item: string; restaurant: string; price: number; macros: unknown; reasoning: string; source: string }
-  | { type: "approval-request"; item: string; restaurant: string; price: number; checkoutTotal: string; macros: unknown; reasoning: string; reportPath: string | null }
+  | { type: "approval-request"; item: string; restaurant: string; price: number; checkoutTotal: string; cartItems: CartLine[]; macros: unknown; reasoning: string; reportPath: string | null }
   | { type: "result"; placed: boolean; message: string }
   | { type: "error"; message: string };
 

@@ -24,7 +24,7 @@ const MIN_CART_BUDGET = 5;
 
 // How many restaurants to scrape per run. Each store costs a slow virtualized
 // menu scroll, so this trades breadth for run time.
-const DEFAULT_MAX_STORES = 2;
+const DEFAULT_MAX_STORES = 12;
 
 const DAY_KEYS = ["mon", "tue", "wed", "thu", "fri", "sat", "sun"] as const;
 export type DayKey = (typeof DAY_KEYS)[number];
@@ -33,7 +33,6 @@ const DAY_KEY_TO_FULL: Record<DayKey, DayOfWeek> = {
   mon: "monday", tue: "tuesday", wed: "wednesday",
   thu: "thursday", fri: "friday", sat: "saturday", sun: "sunday",
 };
-const JS_DAY_TO_KEY: DayKey[] = ["sun", "mon", "tue", "wed", "thu", "fri", "sat"];
 
 const MacrosSchema = z.object({
   calories: z.number().nonnegative(),
@@ -165,12 +164,12 @@ function toUserConfig(plan: MacroMePlan): UserConfig {
     days: plan.days.map((d) => DAY_KEY_TO_FULL[d]),
     budgetPerMeal: cartBudget(plan),
     searchQuery: searchQuery(plan),
-    maxStores: Number(process.env.MACROME_MAX_STORES) || DEFAULT_MAX_STORES,
+    maxStores: Math.max(1, Math.min(30, Math.floor(Number(process.env.MACROME_MAX_STORES) || DEFAULT_MAX_STORES))),
   };
 }
 
 function scheduleEntry(plan: MacroMePlan, mealName: string, when: Date) {
-  const today = JS_DAY_TO_KEY[when.getDay()];
+  const today = new Intl.DateTimeFormat('en-US', { weekday: 'short', timeZone: plan.timezone }).format(when).toLowerCase() as DayKey;
   const forMeal = plan.schedule.filter((s) => s.meal.toLowerCase() === mealName.toLowerCase());
   // Prefer today's entry; otherwise any day's, so a manual run outside the
   // schedule still knows where the food should go.

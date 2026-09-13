@@ -3,12 +3,13 @@ import { pathToFileURL } from "url";
 import { chromium } from "playwright-core";
 import Steel from "steel-sdk";
 import { loadPlan } from "./plan.js";
-import { addItemToCart, findStores, goToCheckout, placeOrder, scrapeMenu } from "./doordash.js";
+import { addItemToCart, findStores, placeOrder, scrapeMenu } from "./doordash.js";
 import { pickMeals } from "./macro-picker.js";
-import { printOrderSummary, promptApproval } from "./notifier.js";
+import { printCartSummary, printOrderSummary, promptApproval } from "./notifier.js";
 import { printLiveView, liveViewUrl, dashboardUrl } from "./live-view.js";
 import { emit, enableEvents } from "./events.js";
 import { writeReport } from "./report.js";
+import { prepareCheckout } from './checkout-recovery.js';
 import type { MealConfig, StoreMenu } from "./types.js";
 
 const isDryRun = process.argv.includes("--dry-run");
@@ -29,12 +30,12 @@ const MOCK_MENUS: StoreMenu[] = [
   },
 ];
 
-export async function runMealOrder(mealConfig: MealConfig): Promise<void> {
+export async function runMealOrder(mealConfig: MealConfig, scheduledFor = new Date()): Promise<boolean> {
   const plan = loadPlan();
   const config = plan.config;
   // The onboarding plan in prose, handed to the meal picker alongside the
   // numeric targets so preferences and delivery context reach the model.
-  const brief = plan.briefFor(mealConfig.name);
+  const brief = plan.briefFor(mealConfig.name, scheduledFor);
   console.log(`\n[agent] Starting order for: ${mealConfig.name}`);
   console.log(`[agent] Plan: ${brief}`);
   emit({ type: "status", message: `Starting order for ${mealConfig.name}` });
@@ -51,6 +52,7 @@ export async function runMealOrder(mealConfig: MealConfig): Promise<void> {
   let checkoutTotal: string | null = null;
   let approved: boolean | null = null;
   let chosenItemId: string | null = null;
+  let orderPlaced = false;
 
   // Written right before the approval prompt so a report exists even if the
   // run is interrupted there, and again at the very end with the outcome.
@@ -80,7 +82,7 @@ export async function runMealOrder(mealConfig: MealConfig): Promise<void> {
     console.log(`[agent] Reasoning report: ${reportPath}`);
     console.log("[agent] DRY RUN complete — no order placed");
     emit({ type: "result", placed: false, message: "Dry run complete — no order placed." });
-    return;
+    return false;
   }
 
   if (!process.env.STEEL_PROFILE_ID) {
@@ -120,12 +122,21 @@ export async function runMealOrder(mealConfig: MealConfig): Promise<void> {
     if (stores.length === 0) throw new Error("No stores found — the saved profile may be logged out. Re-run `npm run setup-profile`.");
 
     let storesRead = 0;
+    const searchDeadline = Date.now() + 4 * 60000;
+    console.log(`[agent] Comparing up to ${stores.length} restaurants from the search results.`);
     for (const store of stores) {
+      if (Date.now() >= searchDeadline && menus.length) {
+        console.log('[agent] Search time budget reached; comparing the menus collected so far.');
+        break;
+      }
       // A fresh tab per store, closed afterwards, frees the memory a long
       // menu scroll builds up — reusing one tab crashed the browser.
       const storePage = await context.newPage();
       try {
-        const menu = await scrapeMenu(storePage, store, config.budgetPerMeal);
+        const menu = await Promise.race([
+          scrapeMenu(storePage, store, config.budgetPerMeal),
+          new Promise<never>((_, reject) => { const timer = setTimeout(() => reject(new Error('Restaurant menu timed out')), 45000); timer.unref(); }),
+        ]);
         storesRead += 1;
         console.log(`[agent] ${menu.store}: ${menu.items.length} items within budget`);
         emit({ type: "status", message: `Read ${menu.items.length} items from ${menu.store}` });
@@ -175,14 +186,21 @@ export async function runMealOrder(mealConfig: MealConfig): Promise<void> {
       try {
         addResult = await addItemToCart(tab, candidate.storeUrl, candidate.itemId);
       } catch (err) {
-        addResult = { ok: false, reason: err instanceof Error ? err.message.split("\n")[0] : "add-threw" };
-        console.log(`[agent] addItemToCart threw for ${candidate.item}: ${addResult.reason}`);
+        if (!browser.isConnected()) throw err;
+        console.log(`[agent] Add needs recovery: ${String(err).split('\n')[0]}`);
+        addResult = { ok: false, reason: 'add-unconfirmed' };
       }
       if (addResult.ok) {
         picked = candidate;
         chosenItemId = candidate.itemId;
         orderPage = tab;
         console.log(`[agent] Added to cart: ${candidate.item}`);
+        break;
+      }
+      if (addResult.reason === "add-unconfirmed" || addResult.reason === "session-ended") {
+        picked = candidate;
+        orderPage = tab;
+        console.log('[agent] Inspecting actual cart before deciding whether to retry or replace the dish.');
         break;
       }
       await tab.close().catch(() => {});
@@ -196,13 +214,17 @@ export async function runMealOrder(mealConfig: MealConfig): Promise<void> {
       throw new Error("None of the picked items could be added to the cart.");
     }
 
-    checkoutTotal = await goToCheckout(orderPage);
-    if (!checkoutTotal) {
-      saveReport(result);
-      throw new Error("Couldn't reach the DoorDash checkout page.");
-    }
+    const prepared = await prepareCheckout(orderPage, picked, result.picks, {
+      budget: plan.raw.derived.perOrderBudget,
+      includesFees: plan.raw.budget.includesFeesAndTip,
+      brief,
+    });
+    const checkout = prepared.checkout;
+    picked = prepared.picked;
+    chosenItemId = picked.itemId;
+    checkoutTotal = checkout.checkoutTotal;
     printOrderSummary(mealConfig, picked);
-    console.log(`  Checkout total: ${checkoutTotal} (everything in the cart, including fees)`);
+    printCartSummary(checkout);
 
     const reportPath = saveReport(result);
     console.log(`[agent] Reasoning report: ${reportPath}`);
@@ -213,6 +235,7 @@ export async function runMealOrder(mealConfig: MealConfig): Promise<void> {
       restaurant: picked.restaurant,
       price: picked.price,
       checkoutTotal,
+      cartItems: checkout.cartItems,
       macros: picked.estimatedMacros,
       reasoning: picked.reasoning,
       reportPath,
@@ -220,22 +243,29 @@ export async function runMealOrder(mealConfig: MealConfig): Promise<void> {
 
     approved = await promptApproval();
     if (approved) {
-      const placed = await placeOrder(orderPage);
+      const placed = await placeOrder(orderPage, checkout);
+      orderPlaced = placed;
       const message = placed
         ? "Order placed! Check DoorDash for confirmation."
         : "Could not find the Place Order button — check the live view.";
       console.log(`[agent] ${message}`);
       emit({ type: "result", placed, message });
     } else {
-      const message = "Order not placed. The item is still in your DoorDash cart.";
+      const message = "Order not placed. The items are still in your DoorDash cart.";
       console.log(`[agent] ${message}`);
       emit({ type: "result", placed: false, message });
     }
     saveReport(result);
+    return orderPlaced;
+  } catch (error) {
+    const message = `${orderPlaced ? 'Order was placed, but follow-up failed.' : 'No order placed.'} ${error instanceof Error ? error.message.split('\n')[0] : error}`;
+    console.log(`[agent] ${message}`);
+    emit({ type: 'result', placed: orderPlaced, message });
+    return orderPlaced;
   } finally {
     closing = true;
-    await browser.close();
-    await client.sessions.release(session.id);
+    await browser.close().catch((error) => console.log(`[agent] Browser cleanup: ${String(error).split('\n')[0]}`));
+    await client.sessions.release(session.id).catch((error) => console.log(`[agent] Session cleanup: ${String(error).split('\n')[0]}`));
     console.log("[agent] Session closed.");
   }
 }
@@ -270,7 +300,10 @@ function mealForThisRun(meals: MealConfig[]): MealConfig {
 if (import.meta.url === pathToFileURL(process.argv[1]).href) {
   try {
     const plan = loadPlan();
-    await runMealOrder(mealForThisRun(plan.config.meals));
+    const scheduledFlag = process.argv.indexOf('--scheduled-for');
+    const scheduledFor = scheduledFlag < 0 ? new Date() : new Date(process.argv[scheduledFlag + 1]);
+    if (!Number.isFinite(scheduledFor.getTime())) throw new Error('Invalid scheduled order date.');
+    await runMealOrder(mealForThisRun(plan.config.meals), scheduledFor);
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
     console.error(`[agent] ${message}`);

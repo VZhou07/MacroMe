@@ -30,12 +30,21 @@ derives two things:
 ```bash
 npm install
 npm install --prefix doordash-macro-agent
+npm run join-nutrition-db --prefix doordash-macro-agent             # restore the bundled nutrition database
 cp doordash-macro-agent/.env.example doordash-macro-agent/.env   # add your keys
 npm run setup-profile                                            # log into DoorDash once
 ```
 
 `setup-profile` opens a live browser you log into by hand, then saves a reusable
 Steel profile id into `.env`. Every later run reuses that login.
+
+The bundled nutrition database is stored as three `nutrition.db.part-NN` files
+to keep each file below GitHub's file-size limit. The join command combines them
+in order into `doordash-macro-agent/data/nutrition.db`, which is gitignored.
+Run it after cloning or pulling updated chunks. No USDA download or database
+rebuild is needed. The agent uses matching food records for per-serving macros
+and falls back to model estimates when no match is found. Name matches and
+database serving sizes may differ from the actual restaurant dish and portion.
 
 ## Running
 
@@ -48,9 +57,36 @@ npm run dev     # http://localhost:3000
   orders, a **Run now** button, and the agent's live browser in an iframe.
   `/setup` always reopens the wizard to edit the plan.
 
-When the agent reaches checkout it pauses and the dashboard shows the item,
-its macros and the checkout total with **Place order** / **Don't order**. Nothing
-is ever charged without that click.
+**Run now** takes the next dated order from **Next scheduled orders**. Once the
+agent reports it placed, that occurrence is removed; future repetitions stay
+scheduled. Completion history is saved in the gitignored
+`macrome-queue-state.json`, survives server restarts, and is also checked by the
+scheduler. Declining, failing, or running in dry-run mode does not mark it complete.
+
+At checkout, the dashboard and terminal list every scraped cart line, quantities,
+prices and available modifiers, alongside DoorDash's full checkout total. The
+recommended dish and its macros are labeled **Agent pick**. **Place order**
+approves the entire cart, including any leftovers. Unreadable carts stop approval;
+a changed cart or total after approval stops placement. Uncertain adds are
+inspected before further changes. Before approval, the model can recover by
+reducing quantities, removing cart lines, replacing the cart with a cheaper
+candidate (including another restaurant), or retrying inspection. Every edit
+uses verified cart controls and is followed by a fresh read. The actual checkout
+total must fit the saved all-in budget; if fees are excluded from the budget,
+the cart's food line totals must fit instead. Recovery stops after eight steps
+or four minutes and explains the unresolved problem without placing an order.
+
+Restaurant discovery scrolls the search results and compares up to 12 restaurants
+by default, with a four-minute search budget. `MACROME_MAX_STORES` can set a cap
+between 1 and 30. Slow or unreadable menus are skipped so other restaurants can
+still be considered.
+
+Development checks: `npm test` covers the order queue and server behavior;
+`npm run test:checkout --prefix doordash-macro-agent` exercises checkout and the
+dashboard in local Chromium. The latter requires a Playwright Chromium install
+and its system libraries; `CHROMIUM_PATH` can select an existing executable.
+`npm run test:recovery --prefix doordash-macro-agent` tests budget enforcement,
+validated model actions, restaurant replacement and bounded retries.
 
 Other entry points:
 
@@ -69,6 +105,6 @@ Other entry points:
 | `OPENROUTER_API_KEY` | The model that picks the meal |
 | `STEEL_PROFILE_ID` | Saved DoorDash login, written by `setup-profile` |
 | `MACROME_CONFIG` | Override the plan file path |
-| `MACROME_MAX_STORES` | Restaurants to scrape per run (default 2) |
+| `MACROME_MAX_STORES` | Restaurants to compare per run (default 12, max 30) |
 
 `macrome-config.json` holds your home address and is gitignored.

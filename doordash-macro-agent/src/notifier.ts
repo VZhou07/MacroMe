@@ -1,12 +1,12 @@
 import { createInterface } from "readline";
 import { eventsEnabled } from "./events.js";
-import type { PickedMeal, MealConfig } from "./types.js";
+import type { CheckoutSummary, PickedMeal, MealConfig } from "./types.js";
 
 export function printOrderSummary(meal: MealConfig, picked: PickedMeal): void {
   console.log("\n" + "=".repeat(55));
   console.log(`  MEAL ORDER READY — ${meal.name.toUpperCase()}`);
   console.log("=".repeat(55));
-  console.log(`  Item:       ${picked.item}`);
+  console.log(`  Agent pick: ${picked.item}`);
   console.log(`  Restaurant: ${picked.restaurant}`);
   console.log(`  Price:      $${picked.price.toFixed(2)}`);
   const sourceLabel = picked.source === "usda" ? "USDA verified" : "LLM estimate";
@@ -16,6 +16,16 @@ export function printOrderSummary(meal: MealConfig, picked: PickedMeal): void {
   }
   console.log(`  Why:        ${picked.reasoning}`);
   console.log("=".repeat(55));
+}
+
+export function printCartSummary(checkout: CheckoutSummary): void {
+  const count = checkout.cartItems.reduce((sum, item) => sum + item.quantity, 0);
+  console.log(`\n[cart] ${count} item(s) across ${checkout.cartItems.length} cart line(s):`);
+  for (const item of checkout.cartItems) {
+    console.log(`[cart] ${item.quantity} × ${item.name} — ${item.linePrice}${item.modifiers.length ? ` (${item.modifiers.join("; ")})` : ""}`);
+  }
+  console.log(`[cart] Checkout total: ${checkout.checkoutTotal}. Place order charges the entire cart, including fees and tip shown by DoorDash.`);
+  console.log("[cart] The agent pick's macros describe that dish only, not the whole cart.");
 }
 
 /**
@@ -33,7 +43,7 @@ export async function promptApproval(): Promise<boolean> {
 function awaitTerminalApproval(): Promise<boolean> {
   const rl = createInterface({ input: process.stdin, output: process.stdout });
   return new Promise((resolve) => {
-    rl.question("  Place this order? (yes/no): ", (answer) => {
+    rl.question("  Place the entire cart at the checkout total above? (yes/no): ", (answer) => {
       rl.close();
       releaseStdin();
       resolve(answer.trim().toLowerCase() === "yes");

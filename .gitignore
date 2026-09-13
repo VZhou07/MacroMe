@@ -1,5 +1,7 @@
 # MacroMe user plan (contains addresses)
 macrome-config.json
+macrome-queue-state.json
+macrome-queue-state.json.*.tmp
 
 node_modules/
 .env

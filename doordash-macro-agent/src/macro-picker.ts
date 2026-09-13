@@ -5,6 +5,8 @@ import type { MacroGoals, MealConfig, MealMacros, PickedMeal, StoreMenu } from "
 const openai = new OpenAI({
   baseURL: "https://openrouter.ai/api/v1",
   apiKey: process.env.OPENROUTER_API_KEY,
+  timeout: 30000,
+  maxRetries: 1,
 });
 
 const FREE_MODEL = "nvidia/nemotron-3-super-120b-a12b:free";
@@ -38,7 +40,7 @@ function distanceScore(macros: MealMacros, target: MealMacros): number {
   );
 }
 
-// Returns up to 3 candidates, ranked best-first by actual distance to the
+// Returns up to 8 candidates, ranked best-first by actual distance to the
 // macro target. Every candidate is guaranteed to be a real item from the
 // scraped menus — the model only chooses among ids. Macros are verified
 // against USDA FoodData Central where a confident match exists; otherwise
@@ -85,7 +87,8 @@ Macro targets for this meal (${mealConfig.name}):
 - Max budget: $${budgetPerMeal}
 
 Rules: only choose ids that appear in the menu in [brackets]; choose a single-serving meal for one person (no family-size, bundles, sides, drinks, or add-ons); prioritize protein; estimate macros from the name and description; treat any dietary requirement or avoided ingredient in the plan above as a hard constraint and never pick an item that breaks it.
-Return ONLY valid JSON, no extra text: a ranked array of up to 3 choices, best first:
+Compare all the supplied restaurants. Include affordable alternatives across different restaurants when available.
+Return ONLY valid JSON, no extra text: a ranked array of up to 8 choices, best first:
 [{"itemId":"123","estimatedMacros":{"calories":0,"protein":0,"carbs":0,"fat":0},"reasoning":"brief reason"}]`;
 
   const userPrompt = `Menus:\n\n${menuText}\n\nReturn the ranked JSON array.`;
@@ -105,8 +108,13 @@ Return ONLY valid JSON, no extra text: a ranked array of up to 3 choices, best f
       if (!jsonMatch) throw new Error(`Model did not return a JSON array. Got: ${rawResponse}`);
 
       const ranked = (JSON.parse(jsonMatch[0]) as Ranked[])
+        .slice(0, 8)
         .map((r) => ({ r, hit: lookup.get(String(r.itemId)) }))
-        .filter((x): x is { r: Ranked; hit: NonNullable<typeof x.hit> } => Boolean(x.hit));
+        .filter((x): x is { r: Ranked; hit: NonNullable<typeof x.hit> } => Boolean(x.hit) && x.hit!.item.price <= budgetPerMeal &&
+          Boolean(x.r.estimatedMacros) && ['calories', 'protein', 'carbs', 'fat'].every((key) => {
+            const value = x.r.estimatedMacros[key as keyof MealMacros];
+            return typeof value === 'number' && Number.isFinite(value) && value >= 0;
+          }));
 
       if (ranked.length === 0) throw new Error(`Model chose no valid menu item ids. Got: ${rawResponse}`);
 

@@ -4,7 +4,6 @@
 const $ = (sel) => document.querySelector(sel);
 const esc = (s) => String(s).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 const money = (n) => `$${Number(n).toFixed(2)}`;
-const JS_DAY_TO_KEY = ['sun', 'mon', 'tue', 'wed', 'thu', 'fri', 'sat'];
 const POLL_MS = 1500;
 
 function fmtTime(hhmm) {
@@ -16,6 +15,7 @@ let plan = null;
 let lastStatus = null;
 let latest = null;      // most recent /api/run payload, for the Reconnect button
 let viewerKey = null;   // what the viewer currently shows, so polling doesn't remount it
+let decisionPending = false;
 
 function showError(msg) {
   $('#error').textContent = msg || '';
@@ -35,26 +35,16 @@ function renderPlan() {
       <div><dt>Deliver to</dt><dd>${addresses.map((a) => esc(a.label)).join(', ')}</dd></div>
     </dl>`;
 
-  $('#mealPick').innerHTML = meals
-    .map((m) => `<option value="${esc(m.name)}">${esc(m.name)} · eat ${fmtTime(m.time)}</option>`).join('');
+}
 
+function renderUpcoming(orders) {
   const addrLabel = (id) => plan.addresses.find((a) => a.id === id)?.label ?? '';
-  const dateFmt = new Intl.DateTimeFormat(undefined, { weekday: 'short', month: 'short', day: 'numeric' });
-  const now = new Date();
-  const out = [];
-  for (let d = 0; d < 14 && out.length < 5; d++) {
-    const date = new Date(now.getFullYear(), now.getMonth(), now.getDate() + d);
-    const day = JS_DAY_TO_KEY[date.getDay()];
-    for (const order of plan.schedule.filter((o) => o.day === day)) {
-      const [h, m] = order.time.split(':').map(Number);
-      const at = new Date(date.getFullYear(), date.getMonth(), date.getDate(), h, m);
-      if (at.getTime() - plan.orderLeadMinutes * 60000 > now.getTime()) out.push({ at, order });
-      if (out.length >= 5) break;
-    }
-  }
-  $('#upcoming').innerHTML = out.map(({ at, order }) => `
-    <li><span class="when">${dateFmt.format(at)} · ${fmtTime(order.time)}</span>
-    <span class="meta">${esc(order.meal)} to ${esc(addrLabel(order.addressId))} · ordered ${fmtTime(order.orderAt || order.time)}</span></li>`).join('')
+  const dateFmt = new Intl.DateTimeFormat(undefined, { timeZone: plan.timezone || 'UTC', weekday: 'short', month: 'short', day: 'numeric' });
+  const timeFmt = new Intl.DateTimeFormat(undefined, { timeZone: plan.timezone || 'UTC', hour: 'numeric', minute: '2-digit' });
+  $('#nextOrderLabel').textContent = orders[0] ? `Next: ${orders[0].meal} · ${dateFmt.format(new Date(orders[0].eatAt))}` : 'No upcoming orders';
+  $('#upcoming').innerHTML = orders.map((order) => `
+    <li><span class="when">${dateFmt.format(new Date(order.eatAt))} · ${fmtTime(order.time)}</span>
+    <span class="meta">${esc(order.meal)} to ${esc(addrLabel(order.addressId))} · order at ${timeFmt.format(new Date(order.orderAt))}</span></li>`).join('')
     || '<li><span class="meta">Nothing scheduled in the next two weeks.</span></li>';
 }
 
@@ -114,8 +104,8 @@ const STATUS_TEXT = {
 function renderRun(state) {
   latest = state;
   const busy = BUSY.includes(state.status);
-  $('#runNow').disabled = busy;
-  $('#mealPick').disabled = busy;
+  $('#runNow').disabled = busy || !state.upcoming?.length;
+  if (state.upcoming) renderUpcoming(state.upcoming);
   $('#stopRun').hidden = !busy;
   $('#statusStrip').hidden = state.status === 'idle';
   $('#statusDot').className = `pulse ${busy ? 'live' : state.status === 'error' ? 'bad' : 'done'}`;
@@ -129,7 +119,7 @@ function renderRun(state) {
     $('#dashTitle').textContent = busy ? `Ordering ${state.meal || 'your meal'}…` : 'Your agent is ready.';
     $('#dashSub').textContent = busy
       ? 'Follow along in the live browser below.'
-      : 'Pick a meal and it will order it on DoorDash for you.';
+      : 'Run now orders the next scheduled meal. Completed orders leave the queue.';
   }
 
   renderViewer(state);
@@ -139,10 +129,23 @@ function renderRun(state) {
   $('#approval').hidden = !a;
   if (a) {
     const m = a.macros || {};
+    const items = Array.isArray(a.cartItems) ? a.cartItems : [];
+    $('#approve').disabled = decisionPending || !items.length || !a.checkoutTotal || state.status !== 'awaiting-approval';
+    $('#reject').disabled = decisionPending || state.status !== 'awaiting-approval';
     $('#approvalBody').innerHTML = `
+      <h4>Entire DoorDash cart</h4>
+      ${items.length ? `<ul class="approval-cart">${items.map((item) => `
+        <li>
+          <div class="cart-line"><b>${esc(item.quantity)} × ${esc(item.name)}</b><span>${esc(item.linePrice)}</span></div>
+          ${(item.modifiers || []).length ? `<p class="review-sub">${item.modifiers.map(esc).join(' · ')}</p>` : ''}
+        </li>`).join('')}</ul>` : '<p>Cart details are unavailable. Start a new run to review the full cart before ordering.</p>'}
+      <p class="approval-total">Checkout total <b>${esc(a.checkoutTotal || '—')}</b></p>
+      <p class="review-sub">Place order charges the entire cart above, including DoorDash’s fees and tip in this total.</p>
       <div class="approval-item">
+        <h4>Agent pick</h4>
         <b>${esc(a.item)}</b>
         <span class="meta">${esc(a.restaurant)} · ${money(a.price)}</span>
+        <span class="meta">Macros below are for the agent pick only.</span>
       </div>
       <div class="stats">
         <div class="stat"><b>${m.calories ?? '—'}</b>kcal</div>
@@ -150,7 +153,6 @@ function renderRun(state) {
         <div class="stat"><b>${m.carbs ?? '—'}g</b>carbs</div>
         <div class="stat"><b>${m.fat ?? '—'}g</b>fat</div>
       </div>
-      <p class="approval-total">Checkout total <b>${esc(a.checkoutTotal || '—')}</b> <span class="meta">(everything in the cart, including fees)</span></p>
       <p class="review-sub">${esc(a.reasoning || '')}</p>`;
   }
 
@@ -194,7 +196,7 @@ $('#runNow').addEventListener('click', async () => {
   viewerKey = null;
   $('#result').hidden = true;
   try {
-    renderRun(await post('/api/run', { meal: $('#mealPick').value }));
+    renderRun(await post('/api/run'));
   } catch (err) {
     showError(err.message);
     $('#runNow').disabled = false;
@@ -212,6 +214,7 @@ $('#approve').addEventListener('click', () => decide(true));
 $('#reject').addEventListener('click', () => decide(false));
 
 async function decide(approve) {
+  decisionPending = true;
   $('#approve').disabled = $('#reject').disabled = true;
   try {
     await post('/api/run/approve', { approve });
@@ -219,7 +222,8 @@ async function decide(approve) {
   } catch (err) {
     showError(err.message);
   } finally {
-    $('#approve').disabled = $('#reject').disabled = false;
+    decisionPending = false;
+    await poll();
   }
 }
 

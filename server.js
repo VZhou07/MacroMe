@@ -10,10 +10,11 @@ const http = require('http');
 const fs = require('fs');
 const path = require('path');
 const { spawn } = require('child_process');
+const { upcomingOrders, markCompleted } = require('./order-queue.cjs');
 
 const PORT = process.env.PORT || 3000;
 const UI_DIR = path.join(__dirname, 'ui');
-const CONFIG_PATH = path.join(__dirname, 'macrome-config.json');
+const CONFIG_PATH = process.env.MACROME_CONFIG || path.join(__dirname, 'macrome-config.json');
 const AGENT_DIR = path.join(__dirname, 'doordash-macro-agent');
 const EVENT_PREFIX = '@@MACROME ';
 const MAX_LOG_LINES = 300;
@@ -96,6 +97,14 @@ function handleEvent(event) {
       run.result = { placed: event.placed, message: event.message };
       run.approval = null;
       run.status = 'done';
+      if (event.placed && run.scheduledOrder) {
+        try {
+          markCompleted(run.scheduledOrder.id);
+        } catch (err) {
+          run.error = `Order was placed, but saving queue completion failed: ${err.message}. Do not retry this order.`;
+          log(run.error);
+        }
+      }
       break;
     case 'error':
       run.error = event.message;
@@ -104,11 +113,12 @@ function handleEvent(event) {
   }
 }
 
-function startRun(meal) {
-  run = newRun(meal);
+function startRun(scheduledOrder) {
+  run = newRun(scheduledOrder.meal);
+  run.scheduledOrder = scheduledOrder;
   const tsx = path.join(AGENT_DIR, 'node_modules', '.bin', 'tsx');
   const args = ['src/agent.ts', '--web'];
-  if (meal) args.push('--meal', meal);
+  args.push('--meal', scheduledOrder.meal, '--scheduled-for', scheduledOrder.eatAt);
   if (process.env.MACROME_DRY_RUN) args.push('--dry-run');
 
   child = spawn(fs.existsSync(tsx) ? tsx : 'npx', fs.existsSync(tsx) ? args : ['tsx', ...args], {
@@ -178,11 +188,17 @@ const routes = {
   'POST /api/run': async (req, res) => {
     if (!hasPlan()) return sendJson(res, 400, { error: 'Finish the setup first.' });
     if (child) return sendJson(res, 409, { error: 'A run is already in progress.' });
-    const { meal } = await readBody(req);
-    sendJson(res, 200, startRun(typeof meal === 'string' && meal.trim() ? meal.trim() : null));
+    await readBody(req);
+    if (child) return sendJson(res, 409, { error: 'A run is already in progress.' });
+    const next = upcomingOrders(JSON.parse(fs.readFileSync(CONFIG_PATH, 'utf8')))[0];
+    if (!next) return sendJson(res, 409, { error: 'No upcoming orders in the next two weeks.' });
+    sendJson(res, 200, startRun(next));
   },
 
-  'GET /api/run': (req, res) => sendJson(res, 200, run || { status: 'idle' }),
+  'GET /api/run': (req, res) => sendJson(res, 200, {
+    ...(run || { status: 'idle' }),
+    upcoming: hasPlan() ? upcomingOrders(JSON.parse(fs.readFileSync(CONFIG_PATH, 'utf8'))) : [],
+  }),
 
   'POST /api/run/approve': async (req, res) => {
     if (!run || run.status !== 'awaiting-approval' || !child) {
@@ -190,6 +206,9 @@ const routes = {
     }
     const { approve } = await readBody(req);
     if (typeof approve !== 'boolean') return sendJson(res, 400, { error: '`approve` must be true or false' });
+    if (approve && (!run.approval?.cartItems?.length || !run.approval.checkoutTotal)) {
+      return sendJson(res, 409, { error: 'Full cart details are missing. Start a new run before approving.' });
+    }
     run.status = approve ? 'placing' : 'running';
     child.stdin.write(JSON.stringify({ approve }) + '\n');
     sendJson(res, 200, { ok: true });

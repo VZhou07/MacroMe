@@ -328,6 +328,13 @@ a.btn-rail {
 .approval-item .meta, .approval-total .meta { color: var(--muted); font-size: 14px; font-weight: 400; }
 .approval-total { margin: 16px 0 0; }
 .approval .nav { margin-top: 20px; }
+.approval h4 { margin: 18px 0 10px; }
+.approval-cart { list-style: none; padding: 0; margin: 0; }
+.approval-cart li { padding: 12px 0; border-bottom: 1px solid var(--muted); }
+.cart-line { display: flex; justify-content: space-between; gap: 16px; }
+.cart-line b { overflow-wrap: anywhere; }
+.cart-line > span { white-space: nowrap; }
+.approval-cart .review-sub { margin: 6px 0 0; }
 
 .result h3 { margin: 0 0 6px; font-family: var(--display); }
 .result.good { border-left: 4px solid var(--green); }

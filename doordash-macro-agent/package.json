@@ -3,6 +3,8 @@
   "version": "0.1.0",
   "type": "module",
   "scripts": {
+    "test:checkout": "node --import tsx --test tests/checkout.test.mts",
+    "test:recovery": "node --import tsx --test tests/recovery.test.mts",
     "start": "tsx src/agent.ts",
     "dev": "tsx src/agent.ts --dry-run",
     "schedule": "tsx src/scheduler.ts",

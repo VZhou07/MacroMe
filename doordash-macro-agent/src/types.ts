@@ -38,6 +38,19 @@ export interface MenuItem {
   price: number;
 }
 
+export interface CartLine {
+  name: string;
+  quantity: number;
+  // Preserve DoorDash's currency and displayed amount; never substitute menu prices.
+  linePrice: string;
+  modifiers: string[];
+}
+
+export interface CheckoutSummary {
+  cartItems: CartLine[];
+  checkoutTotal: string;
+}
+
 export interface StoreMenu {
   store: string;
   url: string;
