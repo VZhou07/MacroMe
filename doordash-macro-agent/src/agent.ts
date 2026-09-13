@@ -5,7 +5,7 @@ import Steel from "steel-sdk";
 import { createSession } from "./session.js";
 import { assertConnected, bounded, BrowserUnavailableError, closePage, PageWorkError, whileSessionLive, withStorePage } from "./browser-work.js";
 import { loadPlan } from "./plan.js";
-import { addItemToCart, findStores, placeOrder, scrapeMenu } from "./doordash.js";
+import { addItemToCart, demoPlaceEnabled, findStores, placeOrder, scrapeMenu } from "./doordash.js";
 import { pickMeals } from "./macro-picker.js";
 import { fallbackPicks, syntheticRecommendation } from "./fallback-picks.js";
 import { printCartSummary, printOrderSummary, promptApproval } from "./notifier.js";
@@ -72,14 +72,39 @@ export async function runMealOrder(
     emit({ type: "result", placed: false, message: `No order placed. ${message}` });
     return false;
   } finally {
-    // The day log is a report, never a gate: a failure here must not take the
-    // order down with it.
-    try {
-      appendEntry(record);
-    } catch (error) {
-      console.error(`[agent] Could not write the day log: ${error instanceof Error ? error.message : error}`);
-    }
+    flushDayLog(record);
   }
+}
+
+// Records already written, so an early flush (demo place) isn't appended twice.
+const flushedRecords = new WeakSet<Partial<DayLogEntry>>();
+
+function flushDayLog(record: Partial<DayLogEntry>): void {
+  if (flushedRecords.has(record)) return;
+  flushedRecords.add(record);
+  // The day log is a report, never a gate: a failure here must not take the
+  // order down with it.
+  try {
+    appendEntry(record);
+  } catch (error) {
+    console.error(`[agent] Could not write the day log: ${error instanceof Error ? error.message : error}`);
+  }
+}
+
+/**
+ * Demo place: record the approved pick as placed and flush the day log before
+ * the result event, so the dashboard's Today refresh already sees the meal.
+ * The Steel session is released by the caller's `finally`.
+ */
+function completeDemoPlace(record: Partial<DayLogEntry>, picked: PickedMeal): true {
+  const message = 'Order placed! (demo — DoorDash was not charged.)';
+  record.pick = pickRecord(picked);
+  record.status = 'placed';
+  record.note = message;
+  flushDayLog(record);
+  console.log(`[agent] ${message}`);
+  emit({ type: 'result', placed: true, message });
+  return true;
 }
 
 const pickRecord = (picked: PickedMeal) => ({
@@ -134,6 +159,7 @@ async function presentRecommendationOnly(
     reportPath: null,
   });
   const approved = await promptApproval();
+  if (approved && demoPlaceEnabled()) return completeDemoPlace(record, picked);
   const message = approved
     ? `Recommended ${picked.item} from ${picked.restaurant}. Confirm in DoorDash if you want to place it, or run again for a live cart.`
     : `Passed on ${picked.item}. Nothing was charged.`;
@@ -449,6 +475,12 @@ async function orderMeal(mealConfig: MealConfig, scheduledFor: Date, record: Par
     });
 
     approved = await promptApproval(signal);
+    if (approved && demoPlaceEnabled()) {
+      // Demo: skip the live Place Order click and every payment check.
+      orderPlaced = true;
+      saveReport(result);
+      return completeDemoPlace(record, picked);
+    }
     signal.throwIfAborted();
     assertConnected(activeBrowser);
     if (Date.now() >= expiresAt) throw new Error('Steel session expired before approval could be applied. Start a new run.');

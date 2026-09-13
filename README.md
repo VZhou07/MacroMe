@@ -179,6 +179,7 @@ There is no “Claude Sonnet 5” id in this stack — use a current OpenRouter 
 | `MACROME_DIGEST_TIME` | last meal + 90m | Force EOD time as `HH:MM` in the plan timezone |
 | `MACROME_NO_CRON` | unset | `1` = this `npm run dev` process does not own the minute clock |
 | `MACROME_DRY_RUN` | unset | `1` = mock menu, no Steel / no real order |
+| `MACROME_DEMO_PLACE` | on | Hackathon demo: approving records the order as **placed** (Today and digests update) without clicking Place Order — no payment method needed, DoorDash is never charged. `0` = real checkout |
 | `PORT` | `3000` | Web server port |
 | `MACROME_CONFIG` | `./macrome-config.json` | Override plan path |
 | `MACROME_QUEUE_STATE` / `MACROME_DAY_LOG` / `MACROME_DIGESTS` / `MACROME_SCHEDULER_LOCK` | repo defaults | Override state file paths |
@@ -210,7 +211,7 @@ Scheduled meals fire from this same process, at each meal's order time, and land
 
 Leaving `npm run dev` running automatically saves one **Final EOD digest** per date when due, provided that date has activity. Activity means at least one meal outcome with status **placed, declined, failed, or missed**; all four count, including days when no order was placed. Empty days produce no Final, email, or “digest ready” notification, including during boot catch-up.
 
-The default EOD time is the last meal in that date's schedule plus 90 minutes in the plan timezone: 8:00 PM for a 6:30 PM dinner. The buffer can cross midnight. Finals are saved in `macrome-digests.json` keyed by date. Today then shows **Final**; previous dates appear under **Earlier days** and survive restarts. If the machine was asleep, catch-up saves due digests for dates with logged activity within its look-back window. A saved Final is returned unchanged on repeated requests, even if the day log later changes.
+The default EOD time is the last meal in that date's schedule plus 90 minutes in the plan timezone: 8:00 PM for a 6:30 PM dinner. The buffer can cross midnight. Finals are saved in `macrome-digests.json` keyed by date. Today then shows **Final**; previous dates appear under **Earlier days** and survive restarts. If the machine was asleep, catch-up saves due digests for dates with logged activity within its look-back window. A saved Final is returned unchanged on repeated requests, even if the day log later changes. Exception: once every planned meal for the day is placed (e.g. 3/3), the Final is saved right away instead of waiting for EOD, and that early Final refreshes if more meals are logged before EOD.
 
 - `MACROME_DIGEST_TIME=21:30` (or `"digestTime": "21:30"` in the plan) overrides when EOD runs.
 - **Save today’s digest (finalize)** is optional early finalization. It is disabled for empty days and already saved Finals. Saving early freezes that summary; it is not a live-status refresh.

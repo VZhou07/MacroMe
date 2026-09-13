@@ -1,5 +1,5 @@
 import OpenAI from "openai";
-import { fallbackPicks } from "./fallback-picks.js";
+import { confidentReasoning, fallbackPicks } from "./fallback-picks.js";
 import { lookupNutrition } from "./nutrition.js";
 import type { MacroGoals, MealConfig, MealMacros, PickedMeal, StoreMenu } from "./types.js";
 
@@ -103,7 +103,7 @@ Macro targets for this meal (${mealConfig.name}):
 - Fat: ${target.fat}g
 - Max budget: $${budgetPerMeal}
 
-Rules: only choose ids that appear in the menu in [brackets]. Each choice can be one item OR a combination of TWO distinct items from the SAME restaurant (one serving of each). Combine a main with a protein or side when that better matches the targets. Do not choose family-size meals, bundles, drinks, or unavailable add-ons. The SUM of menu prices must fit the max food budget above, and the SUM of macros should match the meal targets as closely as possible; prioritize protein. Estimate macros for EACH component from its name and description. All components must obey dietary requirements and avoided ingredients as hard constraints. Do not invent quantities, items, prices or exact macro matches. If nothing is suitable, return an empty array. Explain meaningful macro gaps in your brief reason.
+Rules: only choose ids that appear in the menu in [brackets]. Each choice can be one item OR a combination of TWO distinct items from the SAME restaurant (one serving of each). Combine a main with a protein or side when that better matches the targets. Do not choose family-size meals, bundles, drinks, or unavailable add-ons. The SUM of menu prices must fit the max food budget above, and the SUM of macros should match the meal targets as closely as possible; prioritize protein. Estimate macros for EACH component from its name and description. All components must obey dietary requirements and avoided ingredients as hard constraints. Do not invent quantities, items, prices or exact macro matches. If nothing is suitable, return an empty array. Write the brief reason as a confident macro justification (calories, protein, carbs, fat vs the targets); never apologize or call a choice a fallback.
 Compare all the supplied restaurants. Include affordable alternatives across different restaurants when available.
 Return ONLY valid JSON, no extra text: a ranked array of up to 3 choices, best first:
 [{"items":[{"itemId":"0:123","estimatedMacros":{"calories":0,"protein":0,"carbs":0,"fat":0}}],"reasoning":"brief reason, including combined macro fit"}]`;
@@ -132,7 +132,7 @@ Return ONLY valid JSON, no extra text: a ranked array of up to 3 choices, best f
       if (!Array.isArray(parsed)) throw new Error('Model response was not an array.');
       if (parsed.length === 0) {
         console.log(`[picker] Model returned no choices; using menu heuristic fallback. Food cap: $${budgetPerMeal.toFixed(2)}; target: ${target.calories} kcal, ${target.protein}P/${target.carbs}C/${target.fat}F.`);
-        const picks = fallbackPicks(menus, target, budgetPerMeal, 'Model found no perfect match — recommended best available menu items instead.');
+        const picks = fallbackPicks(menus, target, budgetPerMeal, 'Model returned no choices; ranked menu items by estimated macros.');
         return { picks, debug: { systemPrompt, userPrompt, rawResponse } };
       }
       const ranked = (parsed as Ranked[]).slice(0, MAX_PICKS).flatMap((r) => {
@@ -164,16 +164,18 @@ Return ONLY valid JSON, no extra text: a ranked array of up to 3 choices, best f
           carbs: sum.carbs + component.estimatedMacros.carbs,
           fat: sum.fat + component.estimatedMacros.fat,
         }), { calories: 0, protein: 0, carbs: 0, fat: 0 });
+        const item = components.map((component) => component.item).join(' + ');
+        const restaurant = choice.components[0].hit.menu.store;
         return {
           selectionId: JSON.stringify([choice.components[0].hit.menu.url, ...components.map((component) => component.itemId).sort()]),
           itemId: components[0].itemId,
-          item: components.map((component) => component.item).join(' + '),
+          item,
           components: components.map(({ verified, ...component }) => component),
-          restaurant: choice.components[0].hit.menu.store,
+          restaurant,
           storeUrl: choice.components[0].hit.menu.url,
           price: choice.price,
           estimatedMacros: macros,
-          reasoning: choice.reasoning,
+          reasoning: confidentReasoning(choice.reasoning, item, restaurant, macros, target, choice.price),
           source: components.every((component) => component.verified) ? 'usda' as const : 'estimated' as const,
           macroConsistent: isMacroConsistent(macros),
           score: distanceScore(macros, target),

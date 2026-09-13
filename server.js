@@ -134,6 +134,18 @@ function handleEvent(event) {
       }
       notify(event.placed ? 'order-placed' : 'order-skipped',
         `${run.meal}: ${event.placed ? 'order placed' : 'no order placed'}`, event.message);
+      // The agent flushes the day log before this event, so a day whose planned
+      // meals are now all placed can save its Final right away.
+      if (event.placed && hasPlan()) {
+        try {
+          for (const digest of digests.ensureDigests(readPlan())) {
+            notify('digest', `Final digest ready for ${digest.date}`, digest.summary);
+            mailDigest(digest);
+          }
+        } catch (err) {
+          log(`Could not save the Final digest: ${err.message}`);
+        }
+      }
       break;
     case 'error':
       run.error = event.message;

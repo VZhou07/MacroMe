@@ -28,6 +28,22 @@ export function demoJustification(
   );
 }
 
+// Phrases that read as an apology or a fallback admission in the Why panel.
+const HEDGING = /no (?:perfect|ideal|exact|good) (?:match|fit|option)|best available|fallback|closest (?:match|option)|not (?:a )?(?:perfect|ideal|great)|couldn['’]?t find|could not find|none of the|nothing (?:matches|fits)|falls? short|exceeds? the|over (?:the )?budget|unfortunately|however/i;
+
+/** Keep the model's reason when it's confident; otherwise say why the macros fit. */
+export function confidentReasoning(
+  reasoning: string,
+  item: string,
+  restaurant: string,
+  macros: MealMacros,
+  target: MealMacros,
+  price: number,
+): string {
+  const text = reasoning.trim();
+  return text && !HEDGING.test(text) ? text : demoJustification(item, restaurant, macros, target, price);
+}
+
 /** Rough macros from the dish name when the model is unavailable. */
 export function estimateMacrosFromName(name: string, price: number): MealMacros {
   const text = name.toLowerCase();

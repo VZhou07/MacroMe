@@ -165,6 +165,19 @@ function buildDigest(plan, date, entries, now = new Date()) {
   };
 }
 
+/** Meals planned for a date: that weekday's schedule, else the plan's meal list. */
+function plannedMealCount(plan, date) {
+  const day = DAYS[dateKeyToUtc(date).getUTCDay()];
+  const scheduled = (plan.schedule || []).filter((entry) => entry.day === day);
+  return (scheduled.length ? scheduled : plan.meals || []).length;
+}
+
+/** Every planned meal for the day has been placed (e.g. 3/3) — Final can save early. */
+function dayComplete(plan, date, entries) {
+  const planned = plannedMealCount(plan, date);
+  return planned > 0 && entries.filter((entry) => entry.status === 'placed').length >= planned;
+}
+
 /** Activity means any recorded placed, declined, failed or missed meal. */
 function hasActivity(entries) {
   return entries.some((entry) => dayLog.STATUSES.includes(entry.status));
@@ -184,19 +197,34 @@ function generateDigest(plan, date, options = {}) {
 }
 
 /**
- * Write any digest whose end-of-day time has passed and that doesn't exist yet.
+ * Write any digest whose end-of-day time has passed, or whose planned meals are
+ * all placed, and that doesn't exist yet.
  *
  * Called from the same minute tick as the order queue, so a machine that was
  * off all evening still writes yesterday's digest as soon as it comes back.
+ * An early Final is refreshed if more meals land that day before end of day.
  */
 function ensureDigests(plan, now = new Date(), options = {}) {
   const digests = readDigests(options.file);
   const oldest = shiftDateKey(localDate(now, plan.timezone || 'UTC'), -CATCHUP_DAYS);
   const written = [];
   for (const date of dayLog.datesWithEntries(options.dayLogFile)) {
-    if (digests[date] || date < oldest) continue;
+    if (date < oldest) continue;
+    const saved = digests[date];
+    if (saved && !saved.early) continue;
     const due = digestDueAt(plan, date);
-    if (!due || due > now) continue;
+    const pastDue = Boolean(due && due <= now);
+    const entries = dayLog.entriesForDate(date, options.dayLogFile);
+    if (saved) {
+      const logged = entries.filter((entry) => dayLog.STATUSES.includes(entry.status)).length;
+      if (saved.meals.length !== logged) writeDigest({ ...buildDigest(plan, date, entries, now), early: !pastDue }, options.file);
+      continue;
+    }
+    if (!pastDue) {
+      if (!dayComplete(plan, date, entries)) continue;
+      written.push(writeDigest({ ...buildDigest(plan, date, entries, now), early: true }, options.file));
+      continue;
+    }
     try {
       written.push(generateDigest(plan, date, { ...options, now }));
     } catch (err) {

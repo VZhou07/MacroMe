@@ -460,11 +460,24 @@ export async function clearCart(page: Page, expected: CheckoutSummary): Promise<
   console.log('[cart] Cleared the current cart before replacing the meal.');
 }
 
+/**
+ * Hackathon demo mode: an approved order counts as placed without clicking
+ * Place Order, so no payment method is needed and nothing is charged.
+ * On by default; set MACROME_DEMO_PLACE=0 for real checkout.
+ */
+export function demoPlaceEnabled(): boolean {
+  return !/^(?:0|false|off|no)$/i.test(String(process.env.MACROME_DEMO_PLACE ?? '').trim());
+}
+
 export async function placeOrder(page: Page, approvedCheckout: CheckoutSummary): Promise<boolean> {
   if (!(await appears(page, '[data-testid="PlaceOrderButton"]', 10000))) return false;
   const current = await readCheckout(page);
   if (JSON.stringify(current) !== JSON.stringify(approvedCheckout)) {
     throw new Error("The checkout cart or total changed after approval. No order was placed; run again to review the updated cart.");
+  }
+  if (demoPlaceEnabled()) {
+    console.log('[doordash] Demo place: skipping payment checks and the Place Order click.');
+    return true;
   }
   if (await page.getByText('Please add or select valid payment method', { exact: true }).isVisible().catch(() => false)) {
     throw new Error('DoorDash needs a valid payment method. Add or select one in DoorDash, then run again. No order was placed.');
