@@ -363,3 +363,58 @@ a.btn-rail {
 .viewer-actions { display: inline-flex; gap: 16px; align-items: baseline; }
 .viewer-actions .link { background: none; border: 0; padding: 0; cursor: pointer; }
 .viewer-empty a { color: #F5F0E6; }
+
+/* ---------- day summary & digests ---------- */
+.summary-head { display: flex; justify-content: space-between; align-items: baseline; gap: 16px; flex-wrap: wrap; }
+.summary-head h3 { margin: 0; font-family: var(--display); font-size: 22px; font-weight: 600; }
+.summary-line { color: var(--muted); font-size: 14px; margin: 4px 0 0; }
+.summary-actions { display: flex; align-items: center; gap: 12px; flex: none; }
+.tag { font-size: 12px; font-weight: 700; letter-spacing: .06em; text-transform: uppercase; padding: 4px 10px; border-radius: 999px; background: #EDE6D8; color: var(--muted); }
+.tag.final { background: var(--green-soft); color: var(--green); }
+
+/* Four independent ratios against their own targets, so each is a meter in one
+   hue rather than a four-colour series: the label carries identity, the fill
+   only carries "how far along / over". */
+.meters { display: grid; gap: 16px; margin-top: 20px; }
+.meter { display: grid; grid-template-columns: 1fr auto; gap: 6px 12px; }
+.meter-label { font-weight: 700; font-size: 14px; display: flex; align-items: center; gap: 8px; }
+.meter-value { color: var(--muted); font-size: 14px; font-variant-numeric: tabular-nums; }
+.meter-track { grid-column: 1 / -1; height: 10px; border-radius: 99px; background: var(--green-soft); overflow: hidden; }
+.meter-fill { height: 100%; background: var(--green); border-radius: 0 99px 99px 0; transition: width .3s ease; }
+.meter.over .meter-fill { background: var(--tomato-dark); }
+.meter.over .meter-value { color: var(--tomato-dark); font-weight: 700; }
+.meter-note { margin: 14px 0 0; color: var(--muted); font-size: 13px; }
+
+.day-meals { list-style: none; padding: 0; margin: 20px 0 0; }
+.day-meals li { display: grid; grid-template-columns: 92px 1fr auto; gap: 6px 14px; padding: 12px 0; border-top: 1px solid var(--line); align-items: baseline; }
+.day-meals .what { font-weight: 700; overflow-wrap: anywhere; }
+.day-meals .total { white-space: nowrap; font-variant-numeric: tabular-nums; }
+.day-meals .why { grid-column: 2 / -1; color: var(--muted); font-size: 14px; margin: 0; }
+.day-empty { color: var(--muted); font-size: 14px; margin: 18px 0 0; }
+
+/* Status is reserved and always paired with its own word, never colour alone. */
+.pill { font-size: 12px; font-weight: 700; padding: 4px 10px; border-radius: 999px; text-align: center; }
+.pill.placed { background: var(--green-soft); color: var(--green); }
+.pill.declined { background: #EDE6D8; color: var(--muted); }
+.pill.missed { background: #FBF0DA; color: #7A5410; }
+.pill.failed { background: #FBE3DA; color: #9E2A10; }
+
+.history { list-style: none; padding: 0; margin: 12px 0 0; }
+.history > li { border-top: 1px solid var(--line); }
+.history > li:first-child { border-top: 0; }
+.history details { padding: 12px 0; }
+.history summary { cursor: pointer; display: flex; gap: 14px; align-items: baseline; flex-wrap: wrap; }
+.history summary b { flex: none; }
+.history summary span { color: var(--muted); font-size: 14px; }
+.history .day-meals { margin-top: 8px; }
+
+/* ---------- notifications ---------- */
+.toasts { position: fixed; right: 24px; bottom: 24px; z-index: 50; display: flex; flex-direction: column; gap: 10px; width: min(340px, calc(100vw - 48px)); }
+.toast { background: var(--card); border: 1px solid var(--line); border-left: 4px solid var(--green); border-radius: 14px; padding: 12px 16px; box-shadow: var(--shadow); animation: rise .25s ease; }
+.toast b { display: block; }
+.toast p { margin: 4px 0 0; color: var(--muted); font-size: 13px; }
+.toast.digest { border-left-color: var(--tomato); }
+.toast.missed { border-left-color: #B8860B; }
+.toast.bad { border-left-color: #9E2A10; }
+.toast button { float: right; background: none; border: 0; color: var(--muted); cursor: pointer; font-size: 16px; line-height: 1; padding: 0 0 0 8px; }
+.btn-small { padding: 8px 16px; font-size: 14px; }

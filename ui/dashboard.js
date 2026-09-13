@@ -1,10 +1,18 @@
-// MacroMe dashboard: starts an agent run, embeds its live browser view, and
-// collects the order approval the agent is blocking on.
+// MacroMe dashboard: starts an agent run, embeds its live browser view, collects
+// the order approval the agent is blocking on, and shows what the day added up
+// to — today so far, the saved end-of-day digests, and a nudge whenever the
+// server finishes something while you were looking elsewhere.
 
 const $ = (sel) => document.querySelector(sel);
 const esc = (s) => String(s).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 const money = (n) => `$${Number(n).toFixed(2)}`;
 const POLL_MS = 1500;
+// Digests move once a day; only the live run needs a 1.5s heartbeat.
+const DIGEST_POLL_MS = 20000;
+const TOAST_MS = 12000;
+// On a fresh page load, only nudge about things that just happened rather than
+// replaying the server's whole backlog.
+const BACKLOG_MS = 10 * 60000;
 
 function fmtTime(hhmm) {
   const [h, m] = hhmm.split(':').map(Number);
@@ -177,7 +185,146 @@ async function poll() {
   try {
     const state = await (await fetch('/api/run')).json();
     renderRun(state);
+    handleNotifications(state);
   } catch { /* server restarting; the next tick picks it back up */ }
+}
+
+// ---------- notifications ----------
+const seenNotifications = new Set();
+let primed = false;
+// The server restarts with a fresh numbering, so old ids must not mask new ones.
+let notificationBoot = null;
+
+const TOAST_TONE = { digest: 'digest', 'digest-email': 'digest', missed: 'missed', 'run-error': 'bad', 'order-skipped': 'missed' };
+const REFRESHES_DIGEST = ['digest', 'order-placed', 'order-skipped', 'missed', 'run-error'];
+
+function handleNotifications(state) {
+  if (!Array.isArray(state.notifications)) return;
+  if (state.boot !== notificationBoot) {
+    notificationBoot = state.boot;
+    seenNotifications.clear();
+    primed = false;
+  }
+  const fresh = [];
+  for (const note of state.notifications) {
+    if (seenNotifications.has(note.id)) continue;
+    seenNotifications.add(note.id);
+    if (!primed && Date.now() - Date.parse(note.at) > BACKLOG_MS) continue;
+    fresh.push(note);
+  }
+  primed = true;
+  for (const note of fresh.slice(-3)) showToast(note);
+  if (fresh.some((note) => REFRESHES_DIGEST.includes(note.kind))) loadDigests();
+}
+
+function showToast(note) {
+  const toast = document.createElement('div');
+  toast.className = `toast ${TOAST_TONE[note.kind] || ''}`;
+  toast.innerHTML = `<button type="button" aria-label="Dismiss">&times;</button>
+    <b>${esc(note.title)}</b>${note.body ? `<p>${esc(note.body)}</p>` : ''}`;
+  toast.querySelector('button').addEventListener('click', () => toast.remove());
+  $('#toasts').appendChild(toast);
+  setTimeout(() => toast.remove(), TOAST_MS);
+  desktopNotify(note);
+}
+
+// Same message again as an OS notification, for when this tab isn't in front.
+function desktopNotify(note) {
+  if (!('Notification' in window) || Notification.permission !== 'granted') return;
+  try {
+    new Notification(`MacroMe · ${note.title}`, { body: note.body || '', tag: note.id });
+  } catch { /* some browsers only allow these from a service worker */ }
+}
+
+function renderAlertsButton() {
+  const button = $('#alerts');
+  if (!('Notification' in window)) { button.hidden = true; return; }
+  button.textContent = { granted: 'Desktop alerts on', denied: 'Desktop alerts blocked' }[Notification.permission] || 'Desktop alerts';
+  button.disabled = Notification.permission !== 'default';
+}
+
+// ---------- today, and the days before it ----------
+const MACROS = [
+  { key: 'calories', label: 'Calories', unit: 'kcal' },
+  { key: 'protein', label: 'Protein', unit: 'g', dot: 'protein' },
+  { key: 'carbs', label: 'Carbs', unit: 'g', dot: 'carbs' },
+  { key: 'fat', label: 'Fat', unit: 'g', dot: 'fat' },
+];
+const STATUS_LABEL = { placed: 'Ordered', declined: 'Declined', failed: 'Failed', missed: 'Missed' };
+const num = (value) => new Intl.NumberFormat().format(Math.round(Number(value) || 0));
+
+// A date key is a plain calendar day, so read it back in UTC — anything else
+// shifts it by a timezone it was never in.
+function fmtDateKey(date, options = { weekday: 'short', month: 'short', day: 'numeric' }) {
+  const [year, month, day] = date.split('-').map(Number);
+  return new Intl.DateTimeFormat(undefined, { ...options, timeZone: 'UTC' }).format(new Date(Date.UTC(year, month - 1, day)));
+}
+
+/**
+ * One ratio against one limit, so each macro is its own meter in a single hue.
+ * The label and the value carry which macro it is; the fill only says how far
+ * along the day is, and turns over-budget red once it passes the target.
+ */
+function meter(macro, totals, targets) {
+  const value = Number(totals?.[macro.key]) || 0;
+  const target = Number(targets?.[macro.key]) || 0;
+  const percent = target > 0 ? Math.min(100, Math.round((value / target) * 100)) : 0;
+  const over = target > 0 && value > target;
+  return `<div class="meter${over ? ' over' : ''}">
+    <span class="meter-label">${macro.dot ? `<i class="dot ${macro.dot}" aria-hidden="true"></i>` : ''}${macro.label}</span>
+    <span class="meter-value">${num(value)} of ${num(target)} ${macro.unit}${over ? ` · ${num(value - target)} over` : ''}</span>
+    <div class="meter-track" role="progressbar" aria-label="${macro.label}"
+         aria-valuenow="${Math.round(value)}" aria-valuemin="0" aria-valuemax="${Math.round(target)}">
+      <div class="meter-fill" style="width: ${percent}%"></div>
+    </div>
+  </div>`;
+}
+
+function mealRows(digest) {
+  const timeFmt = new Intl.DateTimeFormat(undefined, { timeZone: digest.timezone || 'UTC', hour: 'numeric', minute: '2-digit' });
+  return digest.meals.map((meal) => {
+    const detail = [
+      meal.eatAt ? timeFmt.format(new Date(meal.eatAt)) : null,
+      meal.restaurant,
+      meal.macros ? `${num(meal.macros.calories)} kcal · ${num(meal.macros.protein)}g protein` : null,
+      // The pill already says "Ordered"; a note only earns its place when it
+      // explains why something didn't happen.
+      meal.status === 'placed' ? null : meal.note,
+    ].filter(Boolean).join(' · ');
+    return `<li>
+      <span class="pill ${meal.status}">${STATUS_LABEL[meal.status] || meal.status}</span>
+      <span class="what">${esc(meal.meal)}${meal.item ? ` — ${esc(meal.item)}` : ''}</span>
+      <span class="total">${esc(meal.checkoutTotal || '')}</span>
+      ${detail ? `<p class="why">${esc(detail)}</p>` : ''}
+    </li>`;
+  }).join('');
+}
+
+function renderDigests(payload) {
+  const digest = payload.today;
+  $('#todayTitle').textContent = `Today · ${fmtDateKey(payload.date)}`;
+  $('#todaySummary').textContent = digest.meals.length
+    ? digest.summary
+    : 'Nothing has run today yet.';
+  $('#todayTag').className = `tag${payload.final ? ' final' : ''}`;
+  $('#todayTag').textContent = payload.final ? 'Final' : `Live · digest at ${fmtTime(payload.digestTime)}`;
+  $('#todayMeters').innerHTML = MACROS.map((macro) => meter(macro, digest.totals, digest.targets)).join('');
+  $('#todayMeals').innerHTML = mealRows(digest);
+  $('#todayEmpty').hidden = digest.meals.length > 0;
+
+  $('#historyCard').hidden = !payload.history.length;
+  $('#history').innerHTML = payload.history.map((day) => `
+    <li><details>
+      <summary><b>${fmtDateKey(day.date)}</b><span>${esc(day.summary)}</span></summary>
+      <ul class="day-meals">${mealRows(day)}</ul>
+    </details></li>`).join('');
+}
+
+async function loadDigests() {
+  try {
+    const res = await fetch('/api/digests');
+    if (res.ok) renderDigests(await res.json());
+  } catch { /* server restarting; the next refresh picks it up */ }
 }
 
 async function post(url, body) {
@@ -210,6 +357,24 @@ $('#reconnect').addEventListener('click', () => {
 });
 
 $('#stopRun').addEventListener('click', () => post('/api/run/stop').catch((e) => showError(e.message)));
+
+$('#alerts').addEventListener('click', async () => {
+  // Browsers only grant this from a click, which is why it is a button.
+  await Notification.requestPermission();
+  renderAlertsButton();
+});
+
+$('#summarise').addEventListener('click', async () => {
+  $('#summarise').disabled = true;
+  try {
+    await post('/api/digests');
+    await loadDigests();
+  } catch (err) {
+    showError(err.message);
+  } finally {
+    $('#summarise').disabled = false;
+  }
+});
 $('#approve').addEventListener('click', () => decide(true));
 $('#reject').addEventListener('click', () => decide(false));
 
@@ -232,6 +397,8 @@ async function decide(approve) {
   if (!res.ok) { window.location.href = '/setup'; return; }
   plan = await res.json();
   renderPlan();
-  await poll();
+  renderAlertsButton();
+  await Promise.all([poll(), loadDigests()]);
   setInterval(poll, POLL_MS);
+  setInterval(loadDigests, DIGEST_POLL_MS);
 })();
