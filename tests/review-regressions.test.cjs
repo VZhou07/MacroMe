@@ -60,7 +60,13 @@ test('repeated manual generation preserves the saved digest', (t) => {
 test('concurrent email calls and later restarts send a date only once', async (t) => {
   const options = files(t);
   const original = global.fetch;
-  t.after(() => { global.fetch = original; });
+  const previousDemo = process.env.MACROME_DEMO_PLACE;
+  process.env.MACROME_DEMO_PLACE = '0';
+  t.after(() => {
+    global.fetch = original;
+    if (previousDemo === undefined) delete process.env.MACROME_DEMO_PLACE;
+    else process.env.MACROME_DEMO_PLACE = previousDemo;
+  });
   let calls = 0;
   global.fetch = async () => { calls++; return { ok: true, json: async () => ({ id: 'test' }) }; };
   const saved = digest.buildDigest(plan, '2026-09-14', [{ meal: 'Lunch', status: 'placed' }]);
@@ -69,6 +75,25 @@ test('concurrent email calls and later restarts send a date only once', async (t
   assert.equal(results.filter((r) => r.sent).length, 1);
   assert.equal((await email.sendDigest(saved, sending)).sent, false);
   assert.equal(calls, 1);
+});
+
+test('demo place mode allows digest email re-sends', async (t) => {
+  const options = files(t);
+  const original = global.fetch;
+  const previousDemo = process.env.MACROME_DEMO_PLACE;
+  process.env.MACROME_DEMO_PLACE = '1';
+  t.after(() => {
+    global.fetch = original;
+    if (previousDemo === undefined) delete process.env.MACROME_DEMO_PLACE;
+    else process.env.MACROME_DEMO_PLACE = previousDemo;
+  });
+  let calls = 0;
+  global.fetch = async () => { calls++; return { ok: true, json: async () => ({ id: `test-${calls}` }) }; };
+  const saved = digest.buildDigest(plan, '2026-09-14', [{ meal: 'Lunch', status: 'placed' }]);
+  const sending = { file: options.file, to: 'test@example.com', apiKey: 'fake' };
+  assert.equal((await email.sendDigest(saved, sending)).sent, true);
+  assert.equal((await email.sendDigest(saved, sending)).sent, true);
+  assert.equal(calls, 2);
 });
 
 test('a live scheduler cannot lose its lock just because its heartbeat was delayed', (t) => {
