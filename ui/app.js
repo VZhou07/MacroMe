@@ -544,7 +544,6 @@ async function launch() {
     ? 'Plan saved. Your agent can start ordering from the dashboard.'
     : "Couldn't reach the local server, so the plan is only saved in this browser. Run `npm run ui` and launch again so the agent can read it.";
   $('#openDashboard').hidden = !savedToServer;
-  $('#jsonOut').textContent = JSON.stringify(config, null, 2);
   current = STEPS.length;
   render();
 }

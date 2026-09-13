@@ -20,6 +20,9 @@
   </aside>
 
   <main class="stage">
+    <a class="home-link" href="/" aria-label="Back to dashboard" title="Back to dashboard">
+      <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 11l9-8 9 8"/><path d="M5 10v10h14V10"/></svg>
+    </a>
     <div class="progress" aria-hidden="true"><div class="progress-bar" id="progressBar"></div></div>
 
     <form id="wizard" novalidate autocomplete="on">
@@ -200,10 +203,6 @@
         <h2>Your agent is on it.</h2>
         <p class="lede" id="doneMsg">Here are your next orders.</p>
         <div class="card"><ul class="upcoming" id="upcoming"></ul></div>
-        <details class="json" id="jsonWrap">
-          <summary>View saved config</summary>
-          <pre id="jsonOut"></pre>
-        </details>
         <div class="nav">
           <button type="button" class="btn btn-ghost" id="editPlan">Edit plan</button>
           <a class="btn btn-primary" id="openDashboard" href="/" hidden>Open dashboard</a>

@@ -34,3 +34,6 @@ doordash-macro-agent/reports/
 # Persistent digest email deduplication receipts
 macrome-digests.json.*.email.json
 macrome-scheduler.lock.*
+
+# Raw USDA source CSVs (multi-GB, not for git; run join-nutrition-db to build from these)
+doordash-macro-agent/data/fdc-raw/
