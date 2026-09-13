@@ -110,14 +110,86 @@ A slot that comes due while another order is still awaiting approval is recorded
 ```bash
 npm install
 npm install --prefix doordash-macro-agent
-npm run join-nutrition-db --prefix doordash-macro-agent             # restore the bundled nutrition database
-cp doordash-macro-agent/.env.example doordash-macro-agent/.env   # add your keys
-npm run setup-profile                                            # log into DoorDash once
+npm run join-nutrition-db --prefix doordash-macro-agent   # restore the bundled nutrition database
+cp doordash-macro-agent/.env.example doordash-macro-agent/.env
+# edit doordash-macro-agent/.env (and optionally a repo-root .env) — see below
+npm run setup-profile                                      # log into DoorDash once
+npm run dev                                                # http://localhost:3000
 ```
 
-`setup-profile` opens a live browser you log into by hand, then saves a reusable Steel profile id into `.env`. Every later run reuses that login.
+### Environment files — what to fill in
 
-The bundled nutrition database is stored as three `nutrition.db.part-NN` files to keep each file below GitHub's file-size limit. The join command combines them in order into `doordash-macro-agent/data/nutrition.db`, which is gitignored. Run it after cloning or pulling updated chunks. No USDA download or database rebuild is needed. The agent uses matching food records for per-serving macros and falls back to model estimates when no match is found. Name matches and database serving sizes may differ from the actual restaurant dish and portion.
+The server loads **both** (later file wins on duplicate keys):
+
+1. repo-root `.env`
+2. `doordash-macro-agent/.env`
+
+Copy the example and fill real values. Never commit `.env` files.
+
+#### Required for live ordering
+
+| Variable | Where | How to get it |
+| --- | --- | --- |
+| `STEEL_API_KEY` | `doordash-macro-agent/.env` | [steel.dev](https://steel.dev) API key — cloud browser for DoorDash |
+| `OPENROUTER_API_KEY` | `doordash-macro-agent/.env` | [openrouter.ai](https://openrouter.ai) key — meal picker + checkout recovery |
+| `STEEL_PROFILE_ID` | `doordash-macro-agent/.env` | **Do not invent this.** Run `npm run setup-profile`, log into DoorDash in the live browser, then paste the printed id into `.env` |
+
+Without these three, the dashboard wizard still works, but **Run now** / scheduled live orders will fail.
+
+#### Optional: email digests (Resend)
+
+Leave unset if you only want digests on the dashboard. To email each new Final:
+
+| Variable | Required? | Notes |
+| --- | --- | --- |
+| `RESEND_API_KEY` | yes, to send | From [resend.com](https://resend.com) |
+| `DIGEST_EMAIL` | yes, to send | Inbox(es) to notify; comma-separate for several |
+| `MACROME_EMAIL_FROM` | no | Default: `MacroMe <onboarding@resend.dev>`. Until you verify a domain, Resend only delivers to **the email your Resend account was created with**. For other recipients, verify a domain and set this to an address on that domain. |
+
+Example (root `.env` or agent `.env`):
+
+```bash
+RESEND_API_KEY=re_...
+DIGEST_EMAIL=you@example.com
+# MACROME_EMAIL_FROM="MacroMe <digest@yourdomain.com>"
+```
+
+#### Optional: use Claude (or another paid model) instead of the free default
+
+Meal picking goes through **OpenRouter**, not a raw Anthropic `ANTHROPIC_API_KEY`. A Claude API key alone is not enough unless that key is on OpenRouter (or you route Claude via OpenRouter credits).
+
+```bash
+# in doordash-macro-agent/.env
+OPENROUTER_API_KEY=sk-or-...          # must be able to call the model you pick
+MACROME_MODEL=anthropic/claude-sonnet-4
+```
+
+There is no “Claude Sonnet 5” id in this stack — use a current OpenRouter slug such as `anthropic/claude-sonnet-4` (check [openrouter.ai/anthropic](https://openrouter.ai/anthropic) for the latest). The same `MACROME_MODEL` is used for meal selection and checkout recovery.
+
+**Cost:** the default free model costs $0. Claude Sonnet-class models are paid per token (on the order of a few dollars per million input tokens). MacroMe only calls the model a couple of times per order with a capped menu and short JSON reply, so personal use is usually **cents per meal**, not dollars — still far more than free, and recovery retries add a little. For demos, free is fine; switch to Sonnet if the free model times out or picks poorly.
+
+#### Optional: speed / session / digest timing
+
+| Variable | Default | Purpose |
+| --- | --- | --- |
+| `MACROME_MAX_STORES` | `1` | How many successful menus to compare (max 30) |
+| `MACROME_SEARCH_BUDGET_SECONDS` | `240` | Total discovery + scrape budget (`120` for shorter demos) |
+| `MACROME_MAX_MENU_ITEMS` | `20` | Items sent to the picker across stores (max 60) |
+| `MACROME_SESSION_TIMEOUT_MINUTES` | `15` | Requested Steel browser lifetime (plan limits still apply) |
+| `MACROME_DIGEST_TIME` | last meal + 90m | Force EOD time as `HH:MM` in the plan timezone |
+| `MACROME_NO_CRON` | unset | `1` = this `npm run dev` process does not own the minute clock |
+| `MACROME_DRY_RUN` | unset | `1` = mock menu, no Steel / no real order |
+| `PORT` | `3000` | Web server port |
+| `MACROME_CONFIG` | `./macrome-config.json` | Override plan path |
+| `MACROME_QUEUE_STATE` / `MACROME_DAY_LOG` / `MACROME_DIGESTS` / `MACROME_SCHEDULER_LOCK` | repo defaults | Override state file paths |
+
+Steel session notes: Launch is typically capped at **15 minutes**; Scale/Enterprise can go longer ([Steel limits](https://docs.steel.dev/overview/pricinglimits)). MacroMe requests the minutes you set, verifies the granted lifetime, and releases the session when a run finishes. Lifetime cannot be extended on a live session.
+
+#### Nutrition database
+
+The bundled DB is split into `nutrition.db.part-NN` files. `npm run join-nutrition-db --prefix doordash-macro-agent` builds gitignored `doordash-macro-agent/data/nutrition.db`. Run after clone/pull. No USDA download needed. Matches may differ from real restaurant portions; the agent falls back to model estimates when there is no match.
+
+`setup-profile` opens a live browser you log into by hand, then prints a reusable `STEEL_PROFILE_ID`. Every later run reuses that login until it goes stale (re-run setup when DoorDash logs you out).
 
 ## Running
 
@@ -152,25 +224,21 @@ The default EOD time is the last meal in that date's schedule plus 90 minutes in
 
 ### Optional: email the digest
 
-Set both and each new digest is mailed as it is written:
+Covered under **Setup → Optional: email digests (Resend)** above. Set `RESEND_API_KEY` and `DIGEST_EMAIL` (and optionally `MACROME_EMAIL_FROM`) in either `.env` file.
 
-```bash
-RESEND_API_KEY=re_...          # https://resend.com
-DIGEST_EMAIL=you@example.com   # comma-separate for several
-MACROME_EMAIL_FROM="MacroMe <digest@yourdomain.com>"   # optional
-```
-
-Until you verify a domain, MacroMe sends from Resend's shared `onboarding@resend.dev`, and Resend will only deliver to **the address your Resend account was created with** — any other recipient comes back as a 403 explaining exactly that. That is enough to demo; for anyone else's inbox, verify a domain at resend.com/domains and point `MACROME_EMAIL_FROM` at it.
-
-Gitignored `macrome-digests.json.*.email.json` receipts prevent repeated sends for the same date and recipients, including through MCP and after restart. If delivery times out or the process exits mid-send, the receipt stays unconfirmed and automatic resend is suppressed because delivery may already have happened.
-
-Mail is best-effort and never blocks a run: the digest is already on disk and on the dashboard by the time it is attempted, and a failure is reported as a notification (carrying Resend's own message) rather than an error.
-
-### Optional: MCP server
+### Optional: MCP server (Cursor, Claude Code, Codex)
 
 ```bash
 npm run mcp     # stdio; for MCP clients, not for humans
 ```
+
+One server (`mcp-server.cjs`) — each agent just needs its own config pointing at it:
+
+| Client | Config file | Notes |
+| --- | --- | --- |
+| **Cursor** | `.cursor/mcp.json` | Reload MCP / restart Cursor after changes |
+| **Claude Code** | `.mcp.json` (repo root) | Approve project MCP on first use |
+| **Codex** | `.codex/config.toml` | Project must be **trusted** or Codex ignores this file |
 
 | Tool | What it returns |
 | --- | --- |
@@ -178,14 +246,14 @@ npm run mcp     # stdio; for MCP clients, not for humans
 | `list_digests` | Only saved Final EOD digests, newest first, one line per day |
 | `send_eod_digest` | Email the saved Final, or save an early Final if activity exists and then email it. Empty unsaved days return `isError` without writing or sending. Email receipts still prevent duplicate sends. |
 
-In Cursor, `.cursor/mcp.json`:
+Example shape (all three clients use the same command):
 
 ```json
 {
   "mcpServers": {
     "macrome": {
       "command": "node",
-      "args": ["/absolute/path/to/GooseGPT/mcp-server.cjs"]
+      "args": ["mcp-server.cjs"]
     }
   }
 }
@@ -195,7 +263,11 @@ It reads the same files the dashboard does, so it reports whatever the app alrea
 
 At checkout, the dashboard and terminal list every scraped cart line, quantities, prices and available modifiers, alongside DoorDash's full checkout total. The recommended dish and its macros are labeled **Agent pick**. **Place order** approves the entire cart, including any leftovers. Unreadable carts stop approval; a changed cart or total after approval stops placement. Uncertain adds are inspected before further changes. Before approval, the model can recover by reducing quantities, removing cart lines, replacing the cart with a cheaper candidate (including another restaurant), or retrying inspection. Every edit uses verified cart controls and is followed by a fresh read. The actual checkout total must fit the saved all-in budget; if fees are excluded from the budget, the cart's food line totals must fit instead. Recovery stops after eight steps or four minutes and explains the unresolved problem without placing an order.
 
-Restaurant discovery scrolls the search results and compares up to 30 restaurants by default, with a four-minute search budget. `MACROME_MAX_STORES` can set a cap between 1 and 30. Slow or unreadable menus are skipped so other restaurants can still be considered.
+For demos, the current default is one successfully scraped restaurant (`MACROME_MAX_STORES=1`); discovery keeps at least three restaurant links so a failed first store has fallbacks. Menus are read sequentially, capped at 20 items per store and 45 seconds per tab. `MACROME_SEARCH_BUDGET_SECONDS` sets the total discovery/scrape budget (default 240; try 120 for demos), with time reserved for checkout inside the Steel lifetime. Navigation gets two bounded attempts; unreadable menus are skipped and their tabs closed.
+
+`MACROME_MAX_MENU_ITEMS` caps the picker input across all restaurants (default 20, maximum 60), distributed across stores. It returns up to three meal choices, each containing one or two distinct items from one restaurant. Prices and estimated macros are summed; every selected component must be in the cart before approval. A partial add is inspected before retrying. Dietary constraints remain hard requirements; macro targets are approximate goals, not a promise of exact restaurant nutrition.
+
+`MACROME_MODEL` selects the OpenRouter model for both picking and recovery; see **Setup** for Claude / paid-model notes. The free model remains the default. The picker makes at most two 45-second requests, disables SDK retries, caps output at 1,200 tokens, and requests reasoning off. Logs identify model, menu count, prompt size, elapsed time and HTTP failures. An empty model selection reports tight constraints separately from API timeouts.
 
 Development checks: `npm test` covers the order queue, missed-slot reconciliation, the minute tick, digests and server behavior; `npm run test:checkout --prefix doordash-macro-agent` exercises checkout and the dashboard in local Chromium. The latter requires a Playwright Chromium install and its system libraries; `CHROMIUM_PATH` can select an existing executable. `npm run test:recovery --prefix doordash-macro-agent` tests budget enforcement, validated model actions, restaurant replacement and bounded retries.
 
@@ -208,18 +280,30 @@ Development checks: `npm test` covers the order queue, missed-slot reconciliatio
 | `npm run seed-demo -- --digest` | Fill today with fake placed/declined/missed meals and write the digest |
 | `MACROME_DRY_RUN=1 npm run dev` | Dashboard runs against a mock menu, no browser, no order |
 
-## Environment
+## Environment quick reference
 
-| Variable | Purpose |
-| --- | --- |
-| `STEEL_API_KEY` | Steel remote browser |
-| `OPENROUTER_API_KEY` | The model that picks the meal |
-| `STEEL_PROFILE_ID` | Saved DoorDash login, written by `setup-profile` |
-| `MACROME_CONFIG` | Override the plan file path |
-| `MACROME_MAX_STORES` | Restaurants to compare per run (default 30, max 30) |
-| `MACROME_NO_CRON` | Set to `1` to stop the web process owning the clock |
-| `MACROME_DIGEST_TIME` | When the end-of-day digest runs, `HH:MM` in the plan timezone |
-| `RESEND_API_KEY` / `DIGEST_EMAIL` | Both required to email digests; `MACROME_EMAIL_FROM` sets the sender |
-| `MACROME_QUEUE_STATE` / `MACROME_DAY_LOG` / `MACROME_DIGESTS` / `MACROME_SCHEDULER_LOCK` | Override where each state file lives |
+Full setup instructions are under **Setup** above. Short list:
 
-`macrome-config.json` holds your home address and is gitignored, along with the queue state, day log, digests and scheduler lock.
+| Variable | Required? | Purpose |
+| --- | --- | --- |
+| `STEEL_API_KEY` | for live orders | Steel remote browser |
+| `OPENROUTER_API_KEY` | for live orders | Meal picker + recovery (OpenRouter) |
+| `STEEL_PROFILE_ID` | for live orders | Saved DoorDash login from `setup-profile` |
+| `MACROME_MODEL` | no | OpenRouter model id (default: free). e.g. `anthropic/claude-sonnet-4` |
+| `RESEND_API_KEY` | to email | Resend API key |
+| `DIGEST_EMAIL` | to email | Recipient(s), comma-separated |
+| `MACROME_EMAIL_FROM` | no | Sender; needs a verified Resend domain for non-account inboxes |
+| `MACROME_SESSION_TIMEOUT_MINUTES` | no | Requested browser lifetime (default 15) |
+| `MACROME_MAX_STORES` | no | Successful menus to compare (default 1, max 30) |
+| `MACROME_SEARCH_BUDGET_SECONDS` | no | Discovery + menu budget (default 240) |
+| `MACROME_MAX_MENU_ITEMS` | no | Items sent to the picker (default 20, max 60) |
+| `MACROME_DIGEST_TIME` | no | EOD time `HH:MM` in plan timezone |
+| `MACROME_NO_CRON` | no | `1` = web process does not run the minute clock |
+| `MACROME_DRY_RUN` | no | `1` = mock run, no browser / no charge |
+| `MACROME_CONFIG` | no | Override plan file path |
+| `MACROME_QUEUE_STATE` / `MACROME_DAY_LOG` / `MACROME_DIGESTS` / `MACROME_SCHEDULER_LOCK` | no | Override state file paths |
+| `PORT` | no | Web port (default 3000) |
+
+`macrome-config.json` holds your home address and is gitignored, along with the queue state, day log, digests, email receipts and scheduler lock.
+
+Gitignored `macrome-digests.json.*.email.json` receipts prevent repeated digest emails for the same date and recipients (including MCP). Mail is best-effort and never blocks a run.

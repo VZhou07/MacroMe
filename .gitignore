@@ -24,6 +24,7 @@ credentials.json
 playwright-report/
 test-results/
 .cursor/
+!.cursor/mcp.json
 .venv/
 venv/
 node_modules/

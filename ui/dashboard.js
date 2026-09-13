@@ -48,7 +48,7 @@ function renderPlan() {
       <div><dt>Daily macros</dt><dd>${macros.calories} kcal · ${macros.protein}P / ${macros.carbs}C / ${macros.fat}F</dd></div>
       <div><dt>Per meal</dt><dd>${derived.perMealMacros.calories} kcal · up to ${money(derived.perOrderBudget)}${plan.budget.includesFeesAndTip ? ' all-in' : ' of food'}</dd></div>
       <div><dt>Schedule</dt><dd>${meals.length} meals · ${days.length} days · ${derived.ordersPerWeek} orders/week</dd></div>
-      <div><dt>Looking for</dt><dd>${esc(preferences?.searchQuery || 'healthy')}</dd></div>
+      <div><dt>Looking for</dt><dd>${esc(preferences?.searchQuery || 'No search filter')}</dd></div>
       ${preferences?.dietary?.length ? `<div><dt>Must be</dt><dd>${esc(preferences.dietary.join(', '))}</dd></div>` : ''}
       <div><dt>Deliver to</dt><dd>${addresses.map((a) => esc(a.label)).join(', ')}</dd></div>
     </dl>`;
@@ -330,12 +330,23 @@ function renderDigests(payload) {
   $('#todayMeals').innerHTML = mealRows(digest);
   $('#todayEmpty').hidden = digest.meals.length > 0;
   canFinalize = !payload.final && digest.meals.length > 0;
-  $('#summarise').disabled = finalizing || !canFinalize;
-  $('#finalizeHelp').textContent = payload.final
-    ? 'Final digest saved. Repeated requests keep this saved copy.'
+  const summarise = $('#summarise');
+  // Once Final exists, hide the action — a disabled lookalike with no click feedback was confusing.
+  summarise.hidden = Boolean(payload.final);
+  summarise.disabled = finalizing || !canFinalize;
+  if (!finalizing) summarise.textContent = "Save today’s digest (finalize)";
+  const help = payload.final
+    ? 'Final digest saved for today. It was written at end of day (or earlier) and will not change.'
     : digest.meals.length
-      ? 'A Final digest is saved automatically when due. Saving now finalizes this summary early.'
-      : 'Nothing logged today yet — no digest to save. A Final digest is saved automatically when due if a meal outcome is logged.';
+      ? 'Live preview — not saved yet. A Final digest is written automatically when due. You can also save one early.'
+      : 'Live preview — nothing logged yet, so there is no digest to save. A Final is written automatically when due if a meal outcome is logged.';
+  $('#finalizeHelp').textContent = help;
+  summarise.title = canFinalize
+    ? 'Save today’s digest as Final now'
+    : payload.final
+      ? 'Already saved as Final'
+      : 'Nothing to save until a meal is logged';
+  summarise.setAttribute('aria-label', summarise.title);
 
   $('#historyCard').hidden = !payload.history.length;
   $('#history').innerHTML = payload.history.map((day) => `
@@ -394,17 +405,25 @@ $('#alerts').addEventListener('click', async () => {
 });
 
 $('#summarise').addEventListener('click', async () => {
-  if (!canFinalize || finalizing) return;
+  if (finalizing) return;
+  if (!canFinalize) {
+    showError($('#summarise').title || $('#finalizeHelp').textContent);
+    return;
+  }
   finalizing = true;
-  $('#summarise').disabled = true;
+  const btn = $('#summarise');
+  const previous = btn.textContent;
+  btn.disabled = true;
+  btn.textContent = 'Saving…';
   try {
     await post('/api/digests');
     await loadDigests();
   } catch (err) {
     showError(err.message);
+    btn.textContent = previous;
+    btn.disabled = !canFinalize;
   } finally {
     finalizing = false;
-    $('#summarise').disabled = !canFinalize;
   }
 });
 $('#approve').addEventListener('click', () => decide(true));

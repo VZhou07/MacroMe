@@ -24,7 +24,7 @@ const MIN_CART_BUDGET = 5;
 
 // How many restaurants to scrape per run. Each store costs a slow virtualized
 // menu scroll, so this trades breadth for run time.
-const DEFAULT_MAX_STORES = 30;
+const DEFAULT_MAX_STORES = 1;
 
 const DAY_KEYS = ["mon", "tue", "wed", "thu", "fri", "sat", "sun"] as const;
 export type DayKey = (typeof DAY_KEYS)[number];
@@ -135,14 +135,9 @@ export function cartBudget(plan: MacroMePlan): number {
 
 /** What the agent types into DoorDash's store search. */
 export function searchQuery(plan: MacroMePlan): string {
-  const explicit = plan.preferences.searchQuery.trim();
-  if (explicit) return explicit;
-  const parts: string[] = [];
-  if (plan.preferences.cuisines.length === 1) parts.push(plan.preferences.cuisines[0]);
-  const diet = plan.preferences.dietary.find((d) => /vegan|vegetarian|halal|kosher/i.test(d));
-  if (diet) parts.push(diet);
-  parts.push("healthy");
-  return parts.join(" ").toLowerCase();
+  // The wizard already supplies suggestions. A saved empty value is an
+  // intentional request to browse without a keyword, not to restore "healthy".
+  return plan.preferences.searchQuery.trim();
 }
 
 function toUserConfig(plan: MacroMePlan): UserConfig {

@@ -63,3 +63,37 @@ test('inspection failures reach recovery; repeated failures stop after eight att
   }), /after recovery attempts/);
   assert.equal(decisions, 8);
 });
+
+test('combination is approved only when every selected component is in the cart', async () => {
+  const combo = { ...pick, item: 'Bowl + Rice', components: [
+    { itemId:'1', item:'Bowl', price:15, estimatedMacros:pick.estimatedMacros },
+    { itemId:'2', item:'Rice', price:5, estimatedMacros:pick.estimatedMacros },
+  ] };
+  let calls=0;
+  await assert.rejects(prepareCheckout(page, combo, [combo], options, {
+    inspect:async()=>cart('CA$25.00',['Bowl']), edit:async()=>{}, clear:async()=>{}, add:async()=>({ok:true}),
+    decide:async(input)=>{calls++;assert.match(input.problem,/components/);return {action:'stop',reasoning:'Missing Rice'};},
+  }),/Missing Rice/);
+  assert.equal(calls,1);
+  const result=await prepareCheckout(page, combo, [combo], options, {
+    inspect:async()=>cart('CA$25.00',['Bowl','Rice']), edit:async()=>{}, clear:async()=>{}, add:async()=>({ok:true}),
+    decide:async()=>assert.fail('Complete, in-budget combo needs no recovery'),
+  });
+  assert.equal(result.picked,combo);
+});
+
+test('combination adds stop on a partial failure so recovery cannot blindly duplicate a component', async () => {
+  const { addMealToCart } = await import('../src/meal-components.ts');
+  const combo = { ...pick, components: [
+    {itemId:'1',item:'Bowl',price:15,estimatedMacros:pick.estimatedMacros},
+    {itemId:'2',item:'Rice',price:5,estimatedMacros:pick.estimatedMacros},
+  ] };
+  const calls:string[]=[];
+  const result=await addMealToCart(page,combo,async(_,url,id)=>{
+    assert.equal(url,pick.storeUrl);calls.push(id);
+    if(id==='2') throw new Error('Navigation timed out');
+    return {ok:true};
+  });
+  assert.deepEqual(calls,['1','2']);
+  assert.deepEqual(result,{ok:false,reason:'add-unconfirmed'});
+});

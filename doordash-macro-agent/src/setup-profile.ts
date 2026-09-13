@@ -2,6 +2,7 @@ import "dotenv/config";
 import { createInterface } from "readline";
 import { chromium } from "playwright-core";
 import Steel from "steel-sdk";
+import { createSession } from "./session.js";
 import { printLiveView } from "./live-view.js";
 
 const client = new Steel({ steelAPIKey: process.env.STEEL_API_KEY });
@@ -18,7 +19,7 @@ async function main(): Promise<void> {
 
   const existingProfileId = process.env.STEEL_PROFILE_ID || undefined;
 
-  const session = await client.sessions.create({
+  const session = await createSession(client, {
     persistProfile: true,
     profileId: existingProfileId,
   });

@@ -42,8 +42,8 @@ function candidateCard(c: PickedMeal, rank: number, isChosen: boolean): string {
 }
 
 export function writeReport(run: RunReport): string {
-  const chosen = run.candidates.find((c) => c.itemId === run.chosenItemId);
-  const others = run.candidates.filter((c) => c.itemId !== run.chosenItemId);
+  const chosen = run.candidates.find((c) => (c.selectionId ?? c.itemId) === run.chosenItemId);
+  const others = run.candidates.filter((c) => (c.selectionId ?? c.itemId) !== run.chosenItemId);
 
   const html = `<!doctype html>
 <html>

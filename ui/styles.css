@@ -255,7 +255,12 @@ input[type="range"] { padding: 0; border: 0; accent-color: var(--tomato); box-sh
 .btn-primary:hover { background: var(--tomato-dark); }
 .btn-primary:disabled { opacity: .6; cursor: wait; }
 .btn-ghost { background: transparent; border: 1.5px solid var(--line); }
-.btn-ghost:hover { border-color: var(--ink); }
+.btn-ghost:hover:not(:disabled) { border-color: var(--ink); }
+.btn:disabled, .btn-ghost:disabled {
+  opacity: .45;
+  cursor: not-allowed;
+  transform: none;
+}
 
 /* ---------- small screens ---------- */
 @media (max-width: 860px) {

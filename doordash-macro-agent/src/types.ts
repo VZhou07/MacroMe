@@ -57,7 +57,17 @@ export interface StoreMenu {
   items: MenuItem[];
 }
 
+export interface MealComponent {
+  itemId: string;
+  item: string;
+  price: number;
+  estimatedMacros: MealMacros;
+}
+
 export interface PickedMeal {
+  selectionId?: string; // distinguishes a main alone from a combination containing it
+  // One or two distinct items from the same restaurant; legacy picks omit this.
+  components?: MealComponent[];
   itemId: string;
   item: string;
   restaurant: string;

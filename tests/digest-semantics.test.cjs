@@ -170,7 +170,17 @@ test('MCP send saves an active day and later reads and sends reuse the saved Fin
 test('dashboard only enables early finalization for a live day with activity', (t) => {
   const elements = new Map();
   const sandbox = { document: { querySelector: (selector) => {
-    if (!elements.has(selector)) elements.set(selector, { addEventListener() {} });
+    if (!elements.has(selector)) {
+      elements.set(selector, {
+        addEventListener() {},
+        setAttribute() {},
+        textContent: '',
+        disabled: false,
+        hidden: false,
+        title: '',
+        className: '',
+      });
+    }
     return elements.get(selector);
   } } };
   const source = fs.readFileSync(path.join(root, 'ui/dashboard.js'), 'utf8').split('(async function init()')[0];
@@ -178,13 +188,16 @@ test('dashboard only enables early finalization for a live day with activity', (
   const payload = { date, digestTime: '20:00', final: false, history: [], today: digests.buildDigest(plan, date, []) };
   sandbox.renderDigests(payload);
   assert.equal(elements.get('#summarise').disabled, true);
+  assert.equal(elements.get('#summarise').hidden, false);
   assert.match(elements.get('#todayTag').textContent, /^Live/);
-  assert.match(elements.get('#finalizeHelp').textContent, /Nothing logged/);
+  assert.match(elements.get('#finalizeHelp').textContent, /nothing logged/i);
   payload.today = digests.buildDigest(plan, date, [{ status: 'failed', meal: 'Lunch' }]);
   sandbox.renderDigests(payload);
   assert.equal(elements.get('#summarise').disabled, false);
+  assert.equal(elements.get('#summarise').hidden, false);
   payload.final = true;
   sandbox.renderDigests(payload);
   assert.equal(elements.get('#summarise').disabled, true);
+  assert.equal(elements.get('#summarise').hidden, true);
   assert.equal(elements.get('#todayTag').textContent, 'Final');
 });

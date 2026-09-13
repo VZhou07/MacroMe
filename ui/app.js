@@ -93,6 +93,78 @@ function saveDraft() {
   try { localStorage.setItem(DRAFT_KEY, JSON.stringify(state)); } catch { /* storage unavailable */ }
 }
 
+/** Map a saved macrome-config.json plan back into wizard state (Edit plan). */
+function stateFromConfig(config) {
+  const base = defaultState();
+  const meals = (Array.isArray(config.meals) ? config.meals : [])
+    .filter((m) => m && m.name && m.time)
+    .map((m) => ({ id: uid(), name: String(m.name), time: String(m.time) }));
+  const mealIdByName = Object.fromEntries(meals.map((m) => [m.name, m.id]));
+  const assignments = {};
+  for (const row of config.schedule || []) {
+    const mealId = mealIdByName[row.meal];
+    if (!mealId || !row.addressId) continue;
+    assignments[`${row.day}|${mealId}`] = row.addressId;
+  }
+  const macros = config.macros || {};
+  const budget = config.budget || {};
+  const prefs = config.preferences || {};
+  const addresses = (Array.isArray(config.addresses) && config.addresses.length
+    ? config.addresses
+    : base.addresses
+  ).map((a) => ({
+    id: a.id || uid(),
+    label: a.label || '',
+    street: a.street || '',
+    apt: a.apt || '',
+    city: a.city || '',
+    state: a.state || '',
+    zip: a.zip || '',
+    dropoff: a.dropoff || 'door',
+    instructions: a.instructions || '',
+  }));
+  return {
+    ...base,
+    macros: {
+      protein: macros.protein === undefined || macros.protein === null ? '' : macros.protein,
+      carbs: macros.carbs === undefined || macros.carbs === null ? '' : macros.carbs,
+      fat: macros.fat === undefined || macros.fat === null ? '' : macros.fat,
+    },
+    meals: meals.length ? meals : base.meals,
+    orderLeadMinutes: Number.isFinite(+config.orderLeadMinutes) ? +config.orderLeadMinutes : base.orderLeadMinutes,
+    budget: {
+      amount: budget.amount === undefined || budget.amount === null ? base.budget.amount : budget.amount,
+      period: budget.period || base.budget.period,
+      includesFeesAndTip: budget.includesFeesAndTip !== false,
+      tipPercent: Number.isFinite(+budget.tipPercent) ? +budget.tipPercent : base.budget.tipPercent,
+    },
+    days: Array.isArray(config.days) && config.days.length ? [...config.days] : base.days,
+    addresses,
+    assignments,
+    prefs: {
+      cuisines: [...(prefs.cuisines || [])],
+      dietary: [...(prefs.dietary || [])],
+      avoid: prefs.avoid || '',
+      searchQuery: prefs.searchQuery || '',
+      // Keep an explicit saved query instead of regenerating from chips.
+      searchQueryEdited: Boolean(String(prefs.searchQuery || '').trim()),
+    },
+  };
+}
+
+async function hydrateFromSavedPlan() {
+  try {
+    const res = await fetch('/api/config');
+    if (!res.ok) return;
+    const config = await res.json();
+    state = stateFromConfig(config);
+    // Editing an existing plan: unlock every step in the rail.
+    furthest = STEPS.length - 1;
+    saveDraft();
+    render();
+  } catch { /* no server / offline — keep draft or defaults */ }
+}
+
 function ordersPerWeek() { return state.meals.length * state.days.length; }
 
 function perOrderBudget() {
@@ -284,7 +356,9 @@ function derivedSearchQuery() {
 
 function effectiveSearchQuery() {
   const typed = state.prefs.searchQuery.trim();
-  return state.prefs.searchQueryEdited && typed ? typed : derivedSearchQuery();
+  // Clearing an edited query is intentional, not a request for the default.
+  // An empty query means browse restaurants without a search filter.
+  return state.prefs.searchQueryEdited ? typed : derivedSearchQuery();
 }
 
 function renderPrefs() {
@@ -317,7 +391,7 @@ function renderReview() {
     // Food can take its slot — five cards fill the two-column grid exactly.
     ['meals', 'Meals', `${state.meals.length}/day`, `${mealsByTime().map((x) => `${esc(x.name)} ${fmtTime(x.time)}`).join(' · ')}<br>${esc(dayNames)}`],
     ['budget', 'Budget', `${money(num(state.budget.amount))}/${state.budget.period}`, `≈ ${money(perOrderBudget())} per order · ${money(foodBudget())} for food · ${state.budget.tipPercent}% tip${state.budget.includesFeesAndTip ? ' · fees included' : ''}`],
-    ['prefs', 'Food', esc(effectiveSearchQuery()), esc(prefsSummary())],
+    ['prefs', 'Food', esc(effectiveSearchQuery() || 'No search filter'), esc(prefsSummary())],
     ['location', 'Deliver to', plural(state.addresses.length, 'address'), `<ul class="addr-lines">${addrLines}</ul>`, 'wide'],
   ];
   $('#review').innerHTML = items.map(([step, title, main, sub, cls = '']) => `
@@ -369,7 +443,6 @@ function validate(stepId) {
   }
   if (stepId === 'days' && !state.days.length) return 'Pick at least one day.';
   if (stepId === 'prefs') {
-    if (!effectiveSearchQuery().trim()) return fail('Give the agent something to search DoorDash for.', 'searchQuery');
     const conflict = ['Vegan', 'Vegetarian', 'Pescatarian'].filter((d) => state.prefs.dietary.includes(d));
     if (conflict.length > 1) return `${conflict.join(' and ')} can't both apply. Pick the one that fits.`;
   }
@@ -605,3 +678,5 @@ form.addEventListener('input', (e) => {
 });
 
 render();
+// Prefer the saved plan over a blank/stale draft when opening Edit plan (/setup).
+hydrateFromSavedPlan();
