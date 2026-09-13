@@ -53,27 +53,40 @@ function renderHtml(digest) {
 </div>`;
 }
 
+/** Hackathon demo: allow re-sending the same day's digest (no receipt lock / Resend idempotency). */
+function demoEmailRepeatEnabled() {
+  return !/^(?:0|false|off|no)$/i.test(String(process.env.MACROME_DEMO_PLACE ?? '').trim());
+}
+
 /** Fire-and-forget: always resolves, and says why when it didn't send. */
 async function sendDigest(digest, options = {}) {
   const to = options.to || process.env.DIGEST_EMAIL;
   const key = options.apiKey || process.env.RESEND_API_KEY;
   if (!to || !key) return { sent: false, reason: 'DIGEST_EMAIL and RESEND_API_KEY are not both set' };
+  const demoRepeat = options.demoRepeat ?? demoEmailRepeatEnabled();
   // Reserve before sending: concurrent callers and restarts must not mail twice.
+  // Demo mode skips that so resets / MCP re-sends work during a live pitch.
   const recipients = to.split(',').map((address) => address.trim()).filter(Boolean).sort();
-  const token = createHash('sha256').update(JSON.stringify([digest.date, recipients])).digest('hex');
+  const token = demoRepeat
+    ? createHash('sha256').update(JSON.stringify([digest.date, recipients, Date.now(), Math.random()])).digest('hex')
+    : createHash('sha256').update(JSON.stringify([digest.date, recipients])).digest('hex');
   const receipt = `${options.file || DIGEST_PATH}.${token}.email.json`;
   let reserved = false;
   try {
-    try {
-      fs.writeFileSync(receipt, JSON.stringify({ date: digest.date, status: 'sending' }), { flag: 'wx' });
-      reserved = true;
-    } catch (err) {
-      if (err.code === 'EEXIST') return { sent: false, reason: 'This digest was already emailed or a previous send is still unconfirmed.' };
-      throw err;
+    if (!demoRepeat) {
+      try {
+        fs.writeFileSync(receipt, JSON.stringify({ date: digest.date, status: 'sending' }), { flag: 'wx' });
+        reserved = true;
+      } catch (err) {
+        if (err.code === 'EEXIST') return { sent: false, reason: 'This digest was already emailed or a previous send is still unconfirmed.' };
+        throw err;
+      }
     }
+    const headers = { Authorization: `Bearer ${key}`, 'Content-Type': 'application/json' };
+    if (!demoRepeat) headers['Idempotency-Key'] = token;
     const response = await fetch(options.endpoint || RESEND_ENDPOINT, {
       method: 'POST',
-      headers: { Authorization: `Bearer ${key}`, 'Content-Type': 'application/json', 'Idempotency-Key': token },
+      headers,
       body: JSON.stringify({
         from: process.env.MACROME_EMAIL_FROM || 'MacroMe <onboarding@resend.dev>',
         to: to.split(',').map((address) => address.trim()).filter(Boolean),
@@ -85,11 +98,15 @@ async function sendDigest(digest, options = {}) {
     });
     const body = await response.json().catch(() => ({}));
     if (!response.ok) {
-      fs.unlinkSync(receipt);
-      reserved = false;
+      if (reserved) {
+        fs.unlinkSync(receipt);
+        reserved = false;
+      }
       return { sent: false, reason: body.message || `Resend replied ${response.status}` };
     }
-    fs.writeFileSync(receipt, JSON.stringify({ date: digest.date, status: 'sent', id: body.id || null }));
+    if (reserved) {
+      fs.writeFileSync(receipt, JSON.stringify({ date: digest.date, status: 'sent', id: body.id || null }));
+    }
     return { sent: true, id: body.id || null };
   } catch (err) {
     return { sent: false, reason: `${err instanceof Error ? err.message : String(err)}${reserved ? ' Delivery is unconfirmed; automatic resend is suppressed to avoid duplicates.' : ''}` };
