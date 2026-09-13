@@ -132,6 +132,16 @@ function handleEvent(event) {
           log(run.error);
         }
       }
+      if (event.placed && hasPlan()) {
+        try {
+          for (const digest of digests.ensureDigests(readPlan())) {
+            notify('digest', `Your ${digest.date} digest is ready`, digest.summary);
+            mailDigest(digest);
+          }
+        } catch (err) {
+          log(`Digest check after place failed: ${err.message}`);
+        }
+      }
       notify(event.placed ? 'order-placed' : 'order-skipped',
         `${run.meal}: ${event.placed ? 'order placed' : 'no order placed'}`, event.message);
       // The agent flushes the day log before this event, so a day whose planned

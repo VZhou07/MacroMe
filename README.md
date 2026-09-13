@@ -300,7 +300,7 @@ Full setup instructions are under **Setup** above. Short list:
 | `MACROME_MAX_MENU_ITEMS` | no | Items sent to the picker (default 20, max 60) |
 | `MACROME_DIGEST_TIME` | no | EOD time `HH:MM` in plan timezone |
 | `MACROME_NO_CRON` | no | `1` = web process does not run the minute clock |
-| `MACROME_DRY_RUN` | no | `1` = mock run, no browser / no charge |
+| `MACROME_DEMO_PLACE` | no | Hackathon: default pretend Place Order succeeds (set `0` for real DoorDash payment checks) |
 | `MACROME_CONFIG` | no | Override plan file path |
 | `MACROME_QUEUE_STATE` / `MACROME_DAY_LOG` / `MACROME_DIGESTS` / `MACROME_SCHEDULER_LOCK` | no | Override state file paths |
 | `PORT` | no | Web port (default 3000) |

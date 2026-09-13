@@ -20,9 +20,6 @@ const POLL_MS = 1500;
 // Digests move once a day; only the live run needs a 1.5s heartbeat.
 const DIGEST_POLL_MS = 20000;
 const TOAST_MS = 12000;
-// On a fresh page load, only nudge about things that just happened rather than
-// replaying the server's whole backlog.
-const BACKLOG_MS = 10 * 60000;
 
 function fmtTime(hhmm) {
   const [h, m] = hhmm.split(':').map(Number);
@@ -209,6 +206,20 @@ const seenNotifications = new Set();
 let primed = false;
 // The server restarts with a fresh numbering, so old ids must not mask new ones.
 let notificationBoot = null;
+const SEEN_KEY = 'macrome-seen-notifications';
+
+function loadSeen(boot) {
+  try {
+    const raw = JSON.parse(localStorage.getItem(SEEN_KEY) || '{}');
+    return raw.boot === boot && Array.isArray(raw.ids) ? raw.ids : [];
+  } catch { return []; }
+}
+
+function saveSeen(boot) {
+  try {
+    localStorage.setItem(SEEN_KEY, JSON.stringify({ boot, ids: [...seenNotifications].slice(-100) }));
+  } catch { /* storage unavailable */ }
+}
 
 const TOAST_TONE = { digest: 'digest', 'digest-email': 'digest', missed: 'missed', 'run-error': 'bad', 'order-skipped': 'missed' };
 const REFRESHES_DIGEST = ['digest', 'order-placed', 'order-skipped', 'missed', 'run-error'];
@@ -218,16 +229,20 @@ function handleNotifications(state) {
   if (state.boot !== notificationBoot) {
     notificationBoot = state.boot;
     seenNotifications.clear();
+    for (const id of loadSeen(state.boot)) seenNotifications.add(id);
     primed = false;
   }
   const fresh = [];
   for (const note of state.notifications) {
     if (seenNotifications.has(note.id)) continue;
     seenNotifications.add(note.id);
-    if (!primed && Date.now() - Date.parse(note.at) > BACKLOG_MS) continue;
+    // First poll after open/refresh: ingest the backlog silently so old toasts
+    // (e.g. payment errors) do not reappear every reload.
+    if (!primed) continue;
     fresh.push(note);
   }
   primed = true;
+  saveSeen(notificationBoot);
   for (const note of fresh.slice(-3)) showToast(note);
   if (fresh.some((note) => REFRESHES_DIGEST.includes(note.kind))) loadDigests();
 }
@@ -237,7 +252,11 @@ function showToast(note) {
   toast.className = `toast ${TOAST_TONE[note.kind] || ''}`;
   toast.innerHTML = `<button type="button" aria-label="Dismiss">&times;</button>
     <b>${esc(note.title)}</b>${note.body ? `<p>${esc(note.body)}</p>` : ''}`;
-  toast.querySelector('button').addEventListener('click', () => toast.remove());
+  toast.querySelector('button').addEventListener('click', () => {
+    seenNotifications.add(note.id);
+    saveSeen(notificationBoot);
+    toast.remove();
+  });
   $('#toasts').appendChild(toast);
   setTimeout(() => toast.remove(), TOAST_MS);
   desktopNotify(note);

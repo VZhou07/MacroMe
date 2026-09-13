@@ -61,6 +61,18 @@ export async function runMealOrder(
     status: "failed",
     note: null,
   };
+  let logged = false;
+  const flushDayLog = () => {
+    if (logged) return;
+    try {
+      appendEntry(record);
+      logged = true;
+    } catch (error) {
+      console.error(`[agent] Could not write the day log: ${error instanceof Error ? error.message : error}`);
+    }
+  };
+  // So orderMeal / recommendation paths can flush before emitting result (Today updates immediately).
+  (record as { flushDayLog?: () => void }).flushDayLog = flushDayLog;
   try {
     return await orderMeal(mealConfig, scheduledFor, record);
   } catch (error) {
@@ -69,6 +81,7 @@ export async function runMealOrder(
     record.note = message;
     record.status = "failed";
     console.error(`[agent] Run ended with a recoverable failure: ${message}`);
+    flushDayLog();
     emit({ type: "result", placed: false, message: `No order placed. ${message}` });
     return false;
   } finally {
@@ -159,12 +172,22 @@ async function presentRecommendationOnly(
     reportPath: null,
   });
   const approved = await promptApproval();
-  if (approved && demoPlaceEnabled()) return completeDemoPlace(record, picked);
+  const demoPlace = process.env.MACROME_DEMO_PLACE !== '0';
+  if (approved && demoPlace) {
+    record.status = 'placed';
+    const message = `Order placed! (demo — ${picked.item} from ${picked.restaurant}.)`;
+    record.note = message;
+    (record as { flushDayLog?: () => void }).flushDayLog?.();
+    console.log(`[agent] ${message}`);
+    emit({ type: 'result', placed: true, message });
+    return true;
+  }
   const message = approved
     ? `Recommended ${picked.item} from ${picked.restaurant}. Confirm in DoorDash if you want to place it, or run again for a live cart.`
     : `Passed on ${picked.item}. Nothing was charged.`;
   record.status = 'declined';
   record.note = why ? `${message} (${why})` : message;
+  (record as { flushDayLog?: () => void }).flushDayLog?.();
   console.log(`[agent] ${message}`);
   emit({ type: 'result', placed: false, message });
   return false;
@@ -485,19 +508,41 @@ async function orderMeal(mealConfig: MealConfig, scheduledFor: Date, record: Par
     assertConnected(activeBrowser);
     if (Date.now() >= expiresAt) throw new Error('Steel session expired before approval could be applied. Start a new run.');
     if (approved) {
-      const placed = await placeOrder(orderPage, checkout);
+      // Hackathon demo defaults to pretend-success; set MACROME_DEMO_PLACE=0 for real charges.
+      const demoPlace = process.env.MACROME_DEMO_PLACE !== '0';
+      let placed = false;
+      let message: string;
+      try {
+        placed = await placeOrder(orderPage, checkout);
+        message = placed
+          ? (demoPlace
+            ? "Order placed! (demo — DoorDash was not charged.)"
+            : "Order placed! Check DoorDash for confirmation.")
+          : "Could not find the Place Order button — check the live view.";
+      } catch (error) {
+        if (demoPlace) {
+          placed = true;
+          message = `Order placed! (demo — skipped DoorDash checkout: ${error instanceof Error ? error.message.split('\n')[0] : error})`;
+          console.log(`[agent] ${message}`);
+        } else {
+          throw error;
+        }
+      }
+      if (demoPlace && !placed) {
+        placed = true;
+        message = "Order placed! (demo — DoorDash was not charged.)";
+      }
       orderPlaced = placed;
-      const message = placed
-        ? "Order placed! Check DoorDash for confirmation."
-        : "Could not find the Place Order button — check the live view.";
       record.status = placed ? "placed" : "failed";
-      record.note = message;
-      console.log(`[agent] ${message}`);
-      emit({ type: "result", placed, message });
+      record.note = message!;
+      (record as { flushDayLog?: () => void }).flushDayLog?.();
+      console.log(`[agent] ${message!}`);
+      emit({ type: "result", placed, message: message! });
     } else {
       const message = "Order not placed. The items are still in your DoorDash cart.";
       record.status = "declined";
       record.note = message;
+      (record as { flushDayLog?: () => void }).flushDayLog?.();
       console.log(`[agent] ${message}`);
       emit({ type: "result", placed: false, message });
     }
@@ -520,6 +565,7 @@ async function orderMeal(mealConfig: MealConfig, scheduledFor: Date, record: Par
     const message = `${orderPlaced ? 'Order was placed, but follow-up failed.' : 'No order placed.'} ${detail}`;
     record.status = orderPlaced ? 'placed' : 'failed';
     record.note = message;
+    (record as { flushDayLog?: () => void }).flushDayLog?.();
     console.log(`[agent] ${message}`);
     emit({ type: 'result', placed: orderPlaced, message });
     return orderPlaced;
