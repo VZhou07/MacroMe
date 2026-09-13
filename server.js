@@ -1,9 +1,12 @@
 // MacroMe web server.
 //
-// Two jobs:
+// Three jobs:
 //   1. Onboarding — serve the setup wizard and save the plan to macrome-config.json.
 //   2. Dashboard  — once a plan exists, run the DoorDash agent on demand, stream
 //      its progress, embed its live browser view, and collect the order approval.
+//   3. The clock  — run the minute cron in this process, so leaving this page
+//      open is all it takes for scheduled meals to fire, missed slots to be
+//      recorded and the end-of-day digest to be written.
 //
 // Run: npm run dev  →  http://localhost:3000
 const http = require('http');
@@ -11,6 +14,10 @@ const fs = require('fs');
 const path = require('path');
 const { spawn } = require('child_process');
 const { upcomingOrders, markCompleted } = require('./order-queue.cjs');
+const dayLog = require('./day-log.cjs');
+const digests = require('./digest.cjs');
+const { startTicker } = require('./scheduler-core.cjs');
+const { sendDigest, configured: emailConfigured } = require('./digest-email.cjs');
 
 const PORT = process.env.PORT || 3000;
 const UI_DIR = path.join(__dirname, 'ui');
@@ -22,6 +29,7 @@ const MAX_LOG_LINES = 300;
 const TYPES = { '.html': 'text/html; charset=utf-8', '.css': 'text/css', '.js': 'text/javascript', '.json': 'application/json' };
 
 const hasPlan = () => fs.existsSync(CONFIG_PATH);
+const readPlan = () => JSON.parse(fs.readFileSync(CONFIG_PATH, 'utf8'));
 
 function sendJson(res, status, body) {
   res.writeHead(status, { 'Content-Type': 'application/json', 'Cache-Control': 'no-store' });
@@ -40,6 +48,24 @@ function readBody(req) {
     });
     req.on('error', reject);
   });
+}
+
+// ---------- notifications ----------
+// Small, in-memory and deliberately not persisted: these are "something just
+// happened" nudges for an open dashboard. Anything worth keeping is already in
+// the day log or a digest. The boot id lets a reconnecting page tell a restarted
+// server's numbering apart from its own backlog.
+const BOOT_ID = Date.now().toString(36);
+const NOTIFICATION_LIMIT = 50;
+const notifications = [];
+let notificationCount = 0;
+
+function notify(kind, title, body = null) {
+  const note = { id: `${BOOT_ID}-${++notificationCount}`, at: new Date().toISOString(), kind, title, body };
+  notifications.push(note);
+  if (notifications.length > NOTIFICATION_LIMIT) notifications.shift();
+  console.log(`[notify] ${title}${body ? ` — ${body}` : ''}`);
+  return note;
 }
 
 // ---------- agent run state ----------
@@ -105,10 +131,13 @@ function handleEvent(event) {
           log(run.error);
         }
       }
+      notify(event.placed ? 'order-placed' : 'order-skipped',
+        `${run.meal}: ${event.placed ? 'order placed' : 'no order placed'}`, event.message);
       break;
     case 'error':
       run.error = event.message;
       run.status = 'error';
+      notify('run-error', `${run.meal}: the run stopped`, event.message);
       break;
   }
 }
@@ -119,6 +148,9 @@ function startRun(scheduledOrder) {
   const tsx = path.join(AGENT_DIR, 'node_modules', '.bin', 'tsx');
   const args = ['src/agent.ts', '--web'];
   args.push('--meal', scheduledOrder.meal, '--scheduled-for', scheduledOrder.eatAt);
+  // The agent writes its own day-log row, so it needs to know which queue
+  // occurrence this run belongs to.
+  if (scheduledOrder.id) args.push('--occurrence', scheduledOrder.id);
   if (process.env.MACROME_DRY_RUN) args.push('--dry-run');
 
   child = spawn(fs.existsSync(tsx) ? tsx : 'npx', fs.existsSync(tsx) ? args : ['tsx', ...args], {
@@ -166,6 +198,50 @@ function startRun(scheduledOrder) {
   return run;
 }
 
+// ---------- the clock ----------
+function mailDigest(digest) {
+  sendDigest(digest).then((result) => {
+    if (result.sent) return notify('digest-email', `Digest for ${digest.date} emailed`, process.env.DIGEST_EMAIL);
+    if (emailConfigured()) notify('digest-email', `Could not email the ${digest.date} digest`, result.reason);
+  });
+}
+
+/**
+ * Fire scheduled meals from this process.
+ *
+ * The scheduler lock means running `npm run schedule` as well is harmless —
+ * whichever starts first owns the queue — and MACROME_NO_CRON=1 opts this
+ * process out entirely.
+ */
+function startClock() {
+  if (process.env.MACROME_NO_CRON) {
+    console.log('MACROME_NO_CRON is set — this process will not fire scheduled meals. Run `npm run schedule` for that.');
+    return null;
+  }
+  return startTicker({
+    owner: 'npm run dev',
+    loadPlan: () => (hasPlan() ? readPlan() : null),
+    // One run at a time: a second one would fight the first over the same cart.
+    canRun: () => !child,
+    runOrder: (occurrence) => {
+      console.log(`[scheduler] Firing ${occurrence.meal} for ${occurrence.eatAt}`);
+      startRun(occurrence);
+      notify('run-started', `Ordering ${occurrence.meal}`, 'Approve the cart in the dashboard before anything is charged.');
+    },
+    onTick: (result) => {
+      if (result.missed.length) {
+        notify('missed', `${result.missed.length} meal${result.missed.length === 1 ? '' : 's'} missed`,
+          result.missed.map((entry) => `${entry.meal} on ${entry.date}`).join(', '));
+      }
+      for (const digest of result.digests) {
+        notify('digest', `Your ${digest.date} digest is ready`, digest.summary);
+        mailDigest(digest);
+      }
+    },
+    onError: (err) => console.error('[scheduler]', err && err.message ? err.message : err),
+  });
+}
+
 // ---------- routes ----------
 const routes = {
   'GET /api/config': (req, res) => {
@@ -190,15 +266,51 @@ const routes = {
     if (child) return sendJson(res, 409, { error: 'A run is already in progress.' });
     await readBody(req);
     if (child) return sendJson(res, 409, { error: 'A run is already in progress.' });
-    const next = upcomingOrders(JSON.parse(fs.readFileSync(CONFIG_PATH, 'utf8')))[0];
+    const next = upcomingOrders(readPlan())[0];
     if (!next) return sendJson(res, 409, { error: 'No upcoming orders in the next two weeks.' });
     sendJson(res, 200, startRun(next));
   },
 
   'GET /api/run': (req, res) => sendJson(res, 200, {
     ...(run || { status: 'idle' }),
-    upcoming: hasPlan() ? upcomingOrders(JSON.parse(fs.readFileSync(CONFIG_PATH, 'utf8'))) : [],
+    upcoming: hasPlan() ? upcomingOrders(readPlan()) : [],
+    boot: BOOT_ID,
+    notifications,
   }),
+
+  // Today plus every saved end-of-day summary. Before the digest is due, today
+  // is built on the fly from the day log so the page isn't blank all day; once
+  // it is written, `final` flips and the saved copy is served instead.
+  'GET /api/digests': (req, res) => {
+    if (!hasPlan()) return sendJson(res, 404, { error: 'No plan saved yet' });
+    const plan = readPlan();
+    const date = digests.today(plan);
+    const saved = digests.getDigest(date);
+    const dueAt = digests.digestDueAt(plan, date);
+    sendJson(res, 200, {
+      date,
+      timezone: plan.timezone || 'UTC',
+      digestTime: digests.digestTime(plan),
+      dueAt: dueAt ? dueAt.toISOString() : null,
+      final: Boolean(saved),
+      today: saved || digests.buildDigest(plan, date, dayLog.entriesForDate(date)),
+      history: digests.listDigests().filter((digest) => digest.date !== date),
+      emailConfigured: emailConfigured(),
+    });
+  },
+
+  // Write a date's digest now instead of waiting for its end-of-day time —
+  // used by the dashboard's "Summarise today" button and for demos.
+  'POST /api/digests': async (req, res) => {
+    if (!hasPlan()) return sendJson(res, 400, { error: 'Finish the setup first.' });
+    const body = await readBody(req);
+    const plan = readPlan();
+    const date = /^\d{4}-\d{2}-\d{2}$/.test(body.date || '') ? body.date : digests.today(plan);
+    const digest = digests.generateDigest(plan, date);
+    notify('digest', `Digest ready for ${digest.date}`, digest.summary);
+    if (body.email) mailDigest(digest);
+    sendJson(res, 200, digest);
+  },
 
   'POST /api/run/approve': async (req, res) => {
     if (!run || run.status !== 'awaiting-approval' || !child) {
@@ -258,4 +370,5 @@ http.createServer(async (req, res) => {
 }).listen(PORT, () => {
   console.log(`MacroMe running at http://localhost:${PORT}`);
   console.log(hasPlan() ? 'Plan found — opening the dashboard.' : 'No plan yet — opening the setup wizard.');
+  startClock();
 });
