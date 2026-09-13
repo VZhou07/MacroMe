@@ -228,7 +228,12 @@ http.createServer(async (req, res) => {
   if (file !== UI_DIR && !file.startsWith(UI_DIR + path.sep)) { res.writeHead(403); return res.end(); }
   fs.readFile(file, (err, data) => {
     if (err) { res.writeHead(404); return res.end('Not found'); }
-    res.writeHead(200, { 'Content-Type': TYPES[path.extname(file)] || 'application/octet-stream' });
+    res.writeHead(200, {
+      'Content-Type': TYPES[path.extname(file)] || 'application/octet-stream',
+      // The UI is edited while the server runs; without this the browser serves
+      // a stale app.js/dashboard.js from cache after a change.
+      'Cache-Control': 'no-cache',
+    });
     res.end(data);
   });
 }).listen(PORT, () => {

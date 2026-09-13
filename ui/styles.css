@@ -353,3 +353,6 @@ a.btn-rail {
   .dash-actions { width: 100%; }
 }
 .budget-note { margin: 14px 0 0; padding: 10px 14px; border-radius: 12px; background: #FBF0DA; color: #7A5410; font-size: 14px; }
+.viewer-actions { display: inline-flex; gap: 16px; align-items: baseline; }
+.viewer-actions .link { background: none; border: 0; padding: 0; cursor: pointer; }
+.viewer-empty a { color: #F5F0E6; }

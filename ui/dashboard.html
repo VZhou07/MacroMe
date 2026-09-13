@@ -55,7 +55,10 @@
     <section class="viewer" id="viewer">
       <div class="viewer-head">
         <span class="field-title">Live browser</span>
-        <a id="popOut" class="link" href="#" target="_blank" rel="noopener" hidden>Open in a new tab</a>
+        <span class="viewer-actions">
+          <button type="button" id="reconnect" class="link" hidden>Reconnect</button>
+          <a id="popOut" class="link" href="#" target="_blank" rel="noopener" hidden>Open in a new tab</a>
+        </span>
       </div>
       <div class="viewer-frame" id="viewerFrame">
         <p class="viewer-empty" id="viewerEmpty">The agent's browser appears here once a run starts.</p>

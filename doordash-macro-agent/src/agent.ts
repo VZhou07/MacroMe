@@ -171,16 +171,24 @@ export async function runMealOrder(mealConfig: MealConfig): Promise<void> {
       });
       // Fresh tab per attempt, same reason as the menu scrape above.
       const tab = await context.newPage();
-      if (await addItemToCart(tab, candidate.storeUrl, candidate.itemId).catch(() => false)) {
+      let addResult: Awaited<ReturnType<typeof addItemToCart>>;
+      try {
+        addResult = await addItemToCart(tab, candidate.storeUrl, candidate.itemId);
+      } catch (err) {
+        addResult = { ok: false, reason: err instanceof Error ? err.message.split("\n")[0] : "add-threw" };
+        console.log(`[agent] addItemToCart threw for ${candidate.item}: ${addResult.reason}`);
+      }
+      if (addResult.ok) {
         picked = candidate;
         chosenItemId = candidate.itemId;
         orderPage = tab;
+        console.log(`[agent] Added to cart: ${candidate.item}`);
         break;
       }
       await tab.close().catch(() => {});
       if (!browser.isConnected()) throw new Error("Lost the Steel browser while adding to cart.");
-      const reason = "couldn't be added (it may need required options like size or sides)";
-      console.log(`[agent] Couldn't add ${candidate.item} — trying next pick`);
+      const reason = `couldn't be added (${addResult.reason})`;
+      console.log(`[agent] Couldn't add ${candidate.item} — ${addResult.reason}; trying next pick`);
       skipped.push({ item: candidate.item, reason });
     }
     if (!picked) {

@@ -313,11 +313,12 @@ function renderReview() {
     <span><b>${esc(a.label)}</b> · ${esc(`${a.street}${a.apt ? `, ${a.apt}` : ''}, ${a.city}, ${a.state} ${a.zip}`)} · ${a.dropoff === 'door' ? 'Leave at door' : 'Hand to me'} · ${plural(counts[a.id], 'order')}/week</span></li>`).join('');
   const items = [
     ['macros', 'Daily macros', `${calories(m).toLocaleString()} cal`, `${m.protein}g protein · ${m.carbs}g carbs · ${m.fat}g fat`],
-    ['meals', 'Meals', `${state.meals.length}/day`, mealsByTime().map((x) => `${esc(x.name)} ${fmtTime(x.time)}`).join(' · ')],
+    // The chosen days ride along with the meal times so the Days card can go and
+    // Food can take its slot — five cards fill the two-column grid exactly.
+    ['meals', 'Meals', `${state.meals.length}/day`, `${mealsByTime().map((x) => `${esc(x.name)} ${fmtTime(x.time)}`).join(' · ')}<br>${esc(dayNames)}`],
     ['budget', 'Budget', `${money(num(state.budget.amount))}/${state.budget.period}`, `≈ ${money(perOrderBudget())} per order · ${money(foodBudget())} for food · ${state.budget.tipPercent}% tip${state.budget.includesFeesAndTip ? ' · fees included' : ''}`],
-    ['days', 'Days', `${ordersPerWeek()} meals/week`, dayNames],
-    ['location', 'Deliver to', plural(state.addresses.length, 'address'), `<ul class="addr-lines">${addrLines}</ul>`, 'wide'],
     ['prefs', 'Food', esc(effectiveSearchQuery()), esc(prefsSummary())],
+    ['location', 'Deliver to', plural(state.addresses.length, 'address'), `<ul class="addr-lines">${addrLines}</ul>`, 'wide'],
   ];
   $('#review').innerHTML = items.map(([step, title, main, sub, cls = '']) => `
     <div class="card ${cls}">

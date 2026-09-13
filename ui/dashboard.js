@@ -14,7 +14,8 @@ function fmtTime(hhmm) {
 
 let plan = null;
 let lastStatus = null;
-let liveUrlShown = null;
+let latest = null;      // most recent /api/run payload, for the Reconnect button
+let viewerKey = null;   // what the viewer currently shows, so polling doesn't remount it
 
 function showError(msg) {
   $('#error').textContent = msg || '';
@@ -57,8 +58,48 @@ function renderPlan() {
     || '<li><span class="meta">Nothing scheduled in the next two weeks.</span></li>';
 }
 
-// ---------- run ----------
+// ---------- live browser ----------
 const BUSY = ['starting', 'running', 'awaiting-approval', 'placing'];
+const ENDED = ['done', 'error', 'cancelled'];
+
+// Steel streams the live session over WebRTC, and that stream can drop while the
+// session itself is still healthy — the agent opening and closing a tab per
+// restaurant is enough to do it. The frame then sits on "Browser Disconnected"
+// until it is remounted, so reloading the iframe is the reconnect.
+function mountViewer(url) {
+  // The timestamp defeats the cache; without it the browser restores the same
+  // dead frame and the reconnect does nothing.
+  const src = `${url}${url.includes('?') ? '&' : '?'}interactive=true&t=${Date.now()}`;
+  $('#viewerFrame').innerHTML =
+    `<iframe src="${esc(src)}" title="The agent's live browser session" allow="clipboard-read; clipboard-write"></iframe>`;
+}
+
+function showViewerEnded(state) {
+  const link = state.dashboardUrl
+    ? ` <a href="${esc(state.dashboardUrl)}" target="_blank" rel="noopener">Watch the recording</a>.`
+    : '';
+  $('#viewerFrame').innerHTML =
+    `<p class="viewer-empty">The agent's browser session has ended.${link}</p>`;
+}
+
+function renderViewer(state) {
+  const ended = ENDED.includes(state.status);
+  // Remount on a new session, and again when the run reaches the approval step
+  // so a stream that dropped mid-scrape can't hide the cart you're approving.
+  const key = !state.liveViewUrl ? 'empty'
+    : ended ? 'ended'
+    : `live:${state.liveViewUrl}:${state.status === 'awaiting-approval'}`;
+
+  $('#reconnect').hidden = !state.liveViewUrl || ended;
+  $('#popOut').hidden = !state.liveViewUrl;
+  if (state.liveViewUrl) $('#popOut').href = state.dashboardUrl || state.liveViewUrl;
+
+  if (key === viewerKey) return;
+  viewerKey = key;
+  if (key === 'empty') return;              // keep the "appears here once a run starts" placeholder
+  if (key === 'ended') return showViewerEnded(state);
+  mountViewer(state.liveViewUrl);
+}
 
 const STATUS_TEXT = {
   starting: 'Starting the browser…',
@@ -71,6 +112,7 @@ const STATUS_TEXT = {
 };
 
 function renderRun(state) {
+  latest = state;
   const busy = BUSY.includes(state.status);
   $('#runNow').disabled = busy;
   $('#mealPick').disabled = busy;
@@ -90,16 +132,7 @@ function renderRun(state) {
       : 'Pick a meal and it will order it on DoorDash for you.';
   }
 
-  // Live view — only reset the src when the URL actually changes, or the iframe
-  // would reload on every poll and flicker.
-  if (state.liveViewUrl && state.liveViewUrl !== liveUrlShown) {
-    liveUrlShown = state.liveViewUrl;
-    $('#viewerFrame').innerHTML =
-      `<iframe src="${esc(state.liveViewUrl)}" title="The agent's live browser session" allow="clipboard-read; clipboard-write"></iframe>`;
-    // Link out to the Steel dashboard page, which can't be framed.
-    $('#popOut').href = state.dashboardUrl || state.liveViewUrl;
-    $('#popOut').hidden = false;
-  }
+  renderViewer(state);
 
   // Approval
   const a = state.approval;
@@ -158,7 +191,7 @@ async function post(url, body) {
 $('#runNow').addEventListener('click', async () => {
   showError(null);
   $('#runNow').disabled = true;
-  liveUrlShown = null;
+  viewerKey = null;
   $('#result').hidden = true;
   try {
     renderRun(await post('/api/run', { meal: $('#mealPick').value }));
@@ -166,6 +199,12 @@ $('#runNow').addEventListener('click', async () => {
     showError(err.message);
     $('#runNow').disabled = false;
   }
+});
+
+$('#reconnect').addEventListener('click', () => {
+  if (!latest?.liveViewUrl) return;
+  viewerKey = `live:${latest.liveViewUrl}:manual:${Date.now()}`;
+  mountViewer(latest.liveViewUrl);
 });
 
 $('#stopRun').addEventListener('click', () => post('/api/run/stop').catch((e) => showError(e.message)));
