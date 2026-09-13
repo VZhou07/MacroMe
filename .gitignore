@@ -23,7 +23,8 @@ credentials.json
 *.har
 playwright-report/
 test-results/
-.cursor/
+# Cursor local state stays private; share the MacroMe MCP config.
+.cursor/*
 !.cursor/mcp.json
 .venv/
 venv/

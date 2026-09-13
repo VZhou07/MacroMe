@@ -1,0 +1,8 @@
+{
+  "mcpServers": {
+    "macrome": {
+      "command": "node",
+      "args": ["mcp-server.cjs"]
+    }
+  }
+}
