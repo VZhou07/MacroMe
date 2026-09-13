@@ -8,6 +8,8 @@
     "ui": "node server.js",
     "agent": "npm start --prefix doordash-macro-agent",
     "schedule": "npm run schedule --prefix doordash-macro-agent",
+    "mcp": "node mcp-server.cjs",
+    "seed-demo": "node scripts/seed-demo.cjs",
     "setup-profile": "npm run setup-profile --prefix doordash-macro-agent",
     "test": "node --test tests/*.test.cjs"
   },
@@ -25,7 +27,9 @@
   "homepage": "https://github.com/VZhou07/GooseGPT#readme",
   "dependencies": {
     "@anthropic-ai/sdk": "^0.125.0",
+    "@modelcontextprotocol/sdk": "^1.30.0",
     "dotenv": "^17.4.2",
-    "steel-sdk": "^0.18.0"
+    "steel-sdk": "^0.18.0",
+    "zod": "^4.6.4"
   }
 }
