@@ -21,6 +21,15 @@ function parsePrice(text: string): number {
   return match ? parseFloat(match[1]) : NaN;
 }
 
+/**
+ * Build-your-own chains need protein/rice/bean choices the agent cannot fill
+ * reliably — skip them during discovery so demos land on simpler menus.
+ */
+export function isUnsupportedCustomStore(name: string, url = ''): boolean {
+  const haystack = `${name} ${url}`.toLowerCase();
+  return /\bchipotle\b/.test(haystack);
+}
+
 export async function findStores(page: Page, query: string, max: number): Promise<{ name: string; url: string }[]> {
   const term = query.trim();
   const url = term ? `${BASE}/search/store/${encodeURIComponent(term)}/` : `${BASE}/`;
@@ -28,6 +37,7 @@ export async function findStores(page: Page, query: string, max: number): Promis
   await page.waitForTimeout(2000);
 
   const stores = new Map<string, { name: string; url: string }>();
+  const skipped = new Set<string>();
   let stagnant = 0;
   for (let pass = 0; pass < 12 && stores.size < max && stagnant < 3; pass++) {
   const before = stores.size;
@@ -48,7 +58,15 @@ export async function findStores(page: Page, query: string, max: number): Promis
     // Keep DoorDash's full store path (slug + id). A bare /store/<id>/ often
     // redirects slowly or lands on a shell without menu cards.
     const clean = href.split(/[?#]/)[0].replace(/\/?$/, "/");
-    if (!stores.has(id)) stores.set(id, { name, url: clean.startsWith("http") ? clean : `${BASE}${clean}` });
+    const storeUrl = clean.startsWith("http") ? clean : `${BASE}${clean}`;
+    if (isUnsupportedCustomStore(name, storeUrl)) {
+      if (!skipped.has(id)) {
+        skipped.add(id);
+        console.log(`[doordash] Skipping ${name} (build-your-own options the agent cannot complete).`);
+      }
+      continue;
+    }
+    if (!stores.has(id)) stores.set(id, { name, url: storeUrl });
     if (stores.size >= max) break;
   }
   stagnant = stores.size === before ? stagnant + 1 : 0;

@@ -5,7 +5,7 @@ import Steel from "steel-sdk";
 import { createSession } from "./session.js";
 import { assertConnected, bounded, BrowserUnavailableError, closePage, PageWorkError, whileSessionLive, withStorePage } from "./browser-work.js";
 import { loadPlan } from "./plan.js";
-import { addItemToCart, demoPlaceEnabled, findStores, placeOrder, scrapeMenu } from "./doordash.js";
+import { addItemToCart, demoPlaceEnabled, findStores, isUnsupportedCustomStore, placeOrder, scrapeMenu } from "./doordash.js";
 import { pickMeals } from "./macro-picker.js";
 import { fallbackPicks, syntheticRecommendation } from "./fallback-picks.js";
 import { printCartSummary, printOrderSummary, promptApproval } from "./notifier.js";
@@ -316,7 +316,11 @@ async function orderMeal(mealConfig: MealConfig, scheduledFor: Date, record: Par
       stores = await bounded(findStores(page, config.searchQuery || 'healthy', storePool),
         Math.min(45000, Math.max(5000, searchDeadline - Date.now())), 'search / restaurant discovery retry').catch(() => []);
     }
-    stores = shuffled(stores);
+    stores = shuffled(stores).filter((store) => {
+      if (!isUnsupportedCustomStore(store.name, store.url)) return true;
+      console.log(`[agent] Skipping ${store.name} (build-your-own options the agent cannot complete).`);
+      return false;
+    });
     if (stores.length === 0) {
       console.log('[agent] No stores found — offering an offline recommendation so the run still completes.');
       return presentRecommendationOnly(mealConfig, record, target, config.budgetPerMeal, plan.raw.preferences || {},
