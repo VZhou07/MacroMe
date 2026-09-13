@@ -51,6 +51,7 @@ test('digest uses the dated schedule and keeps the buffer across midnight', () =
 
 test('repeated manual generation preserves the saved digest', (t) => {
   const options = files(t);
+  dayLog.appendEntry({ date: '2026-09-14', meal: 'Lunch', status: 'placed' }, options.dayLogFile);
   const first = digest.generateDigest(plan, '2026-09-14', options);
   dayLog.appendEntry({ date: '2026-09-14', meal: 'Dinner', status: 'placed' }, options.dayLogFile);
   assert.deepEqual(digest.generateDigest(plan, '2026-09-14', options), first);
@@ -62,7 +63,7 @@ test('concurrent email calls and later restarts send a date only once', async (t
   t.after(() => { global.fetch = original; });
   let calls = 0;
   global.fetch = async () => { calls++; return { ok: true, json: async () => ({ id: 'test' }) }; };
-  const saved = digest.buildDigest(plan, '2026-09-14', []);
+  const saved = digest.buildDigest(plan, '2026-09-14', [{ meal: 'Lunch', status: 'placed' }]);
   const sending = { file: options.file, to: 'test@example.com', apiKey: 'fake' };
   const results = await Promise.all([email.sendDigest(saved, sending), email.sendDigest(saved, sending)]);
   assert.equal(results.filter((r) => r.sent).length, 1);

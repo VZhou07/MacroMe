@@ -34,11 +34,11 @@ function loadPlan() {
 const text = (body) => ({ content: [{ type: 'text', text: body }] });
 const failure = (message) => ({ content: [{ type: 'text', text: message }], isError: true });
 
-/** The saved digest for a date, or today's so far if it hasn't been written yet. */
-function digestFor(plan, date) {
+/** Read the saved Final or a live summary. This never saves a digest. */
+function summaryFor(plan, date) {
   const saved = digests.getDigest(date);
   return {
-    digest: saved || digests.buildDigest(plan, date, dayLog.entriesForDate(date)),
+    summary: saved || digests.buildDigest(plan, date, dayLog.entriesForDate(date)),
     final: Boolean(saved),
   };
 }
@@ -48,14 +48,14 @@ const server = new McpServer({ name: 'macrome', version: '1.0.0' });
 server.registerTool('get_today_summary', {
   title: "Today's MacroMe summary",
   description: 'Macros against target, spend, and every meal placed, declined, failed or missed for a day. '
-    + "Defaults to today in the plan's timezone. Before the end-of-day digest is written this is the running total.",
+    + "Defaults to today in the plan's timezone. Returns the saved Final if present, otherwise a live summary (empty days are allowed). This read never saves a Final.",
   inputSchema: { date: DATE_ARG.optional().describe('Day to summarise, YYYY-MM-DD. Defaults to today.') },
 }, async ({ date }) => {
   try {
     const plan = loadPlan();
     const day = date || digests.today(plan);
-    const { digest, final } = digestFor(plan, day);
-    return text(`${email.renderText(digest)}\n\n${final ? 'This is the saved end-of-day digest.' : `Still in progress — the digest is written at ${digests.digestTime(plan)} ${digest.timezone}.`}`);
+    const { summary, final } = summaryFor(plan, day);
+    return text(`${email.renderText(summary)}\n\n${final ? 'This is the saved Final end-of-day digest.' : `Live summary, still in progress — not Final. The digest is saved automatically when due at ${digests.digestTime(plan, day)} ${summary.timezone}, if a meal outcome has been logged.`}`);
   } catch (err) {
     return failure(err.message);
   }
@@ -77,8 +77,8 @@ server.registerTool('list_digests', {
 });
 
 server.registerTool('send_eod_digest', {
-  title: 'Email a MacroMe digest',
-  description: 'Write a day\'s digest from the day log and email it to DIGEST_EMAIL. '
+  title: 'Save and email a MacroMe digest',
+  description: 'Email the saved Final digest, or save an early Final from logged meal outcomes first. Empty days return an error. '
     + 'Needs RESEND_API_KEY and DIGEST_EMAIL; without them it reports the digest without sending.',
   inputSchema: { date: DATE_ARG.optional().describe('Day to send, YYYY-MM-DD. Defaults to today.') },
 }, async ({ date }) => {

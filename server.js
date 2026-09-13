@@ -302,14 +302,21 @@ const routes = {
   },
 
   // Write a date's digest now instead of waiting for its end-of-day time —
-  // used by the dashboard's "Summarise today" button and for demos.
+  // optional early finalization; ordinary summary reads never save a Final.
   'POST /api/digests': async (req, res) => {
     if (!hasPlan()) return sendJson(res, 400, { error: 'Finish the setup first.' });
     const body = await readBody(req);
     const plan = readPlan();
     const date = /^\d{4}-\d{2}-\d{2}$/.test(body.date || '') ? body.date : digests.today(plan);
-    const digest = digests.generateDigest(plan, date);
-    notify('digest', `Digest ready for ${digest.date}`, digest.summary);
+    const saved = digests.getDigest(date);
+    let digest;
+    try {
+      digest = saved || digests.generateDigest(plan, date);
+    } catch (err) {
+      if (err.code === 'EMPTY_DAY_LOG') return sendJson(res, 422, { error: err.message });
+      throw err;
+    }
+    if (!saved) notify('digest', `Final digest ready for ${digest.date}`, digest.summary);
     if (body.email) mailDigest(digest);
     sendJson(res, 200, digest);
   },

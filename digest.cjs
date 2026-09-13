@@ -122,7 +122,7 @@ function summarize(counts, totals, targets, spend) {
  * plan was built around — not from every line in the cart.
  */
 function buildDigest(plan, date, entries, now = new Date()) {
-  const ordered = [...entries].sort((a, b) => String(a.eatAt || a.at).localeCompare(String(b.eatAt || b.at)));
+  const ordered = entries.filter((entry) => dayLog.STATUSES.includes(entry.status)).sort((a, b) => String(a.eatAt || a.at).localeCompare(String(b.eatAt || b.at)));
   const placed = ordered.filter((entry) => entry.status === 'placed');
   const targets = plan.macros || Object.fromEntries(MACROS.map((key) => [key, 0]));
   const totals = sumMacros(placed);
@@ -165,11 +165,21 @@ function buildDigest(plan, date, entries, now = new Date()) {
   };
 }
 
-/** Build (or rebuild) one date's digest from the day log and save it. */
+/** Activity means any recorded placed, declined, failed or missed meal. */
+function hasActivity(entries) {
+  return entries.some((entry) => dayLog.STATUSES.includes(entry.status));
+}
+
+/** Save a Final once, or return the existing Final. Empty days stay live. */
 function generateDigest(plan, date, options = {}) {
   const saved = getDigest(date, options.file);
   if (saved) return saved;
   const entries = dayLog.entriesForDate(date, options.dayLogFile);
+  if (!hasActivity(entries)) {
+    const error = new Error(`Nothing logged for ${date} yet — no digest to save.`);
+    error.code = 'EMPTY_DAY_LOG';
+    throw error;
+  }
   return writeDigest(buildDigest(plan, date, entries, options.now || new Date()), options.file);
 }
 
@@ -187,7 +197,11 @@ function ensureDigests(plan, now = new Date(), options = {}) {
     if (digests[date] || date < oldest) continue;
     const due = digestDueAt(plan, date);
     if (!due || due > now) continue;
-    written.push(generateDigest(plan, date, { ...options, now }));
+    try {
+      written.push(generateDigest(plan, date, { ...options, now }));
+    } catch (err) {
+      if (err.code !== 'EMPTY_DAY_LOG') throw err;
+    }
   }
   return written;
 }
@@ -198,6 +212,6 @@ function today(plan, now = new Date()) {
 }
 
 module.exports = {
-  DIGEST_PATH, buildDigest, generateDigest, ensureDigests, readDigests,
+  DIGEST_PATH, hasActivity, buildDigest, generateDigest, ensureDigests, readDigests,
   getDigest, listDigests, writeDigest, digestTime, digestDueAt, parseMoney, today,
 };

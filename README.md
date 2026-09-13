@@ -134,13 +134,19 @@ Scheduled meals fire from this same process, at each meal's order time, and land
 
 ### Your day, and the end-of-day digest
 
-**Today** on the dashboard shows the day so far: one meter per macro against your daily target, and every meal that was ordered, declined, failed or missed, with the agent pick, the restaurant and the exact checkout total. Macro totals cover the agent pick in each placed order, not every line in the cart.
+**Today** on the dashboard is a **live summary** until a Final digest has been saved. It is built from the day log and shows macro targets, meals, and spend so far. Macro totals cover the agent pick in placed orders, not every line in the cart. The tag reads **Live · digest at …**. Reading the summary never saves or finalizes anything; an empty day shows zero meals and zero totals and remains live.
 
-The digest is written once per day, at the last meal's time in that date's schedule plus 90 minutes (even if the buffer crosses midnight) (so 8:00 PM for a 6:30 PM dinner), and saved to `macrome-digests.json` keyed by date. Once written the card is marked **Final** and the day drops into **Earlier days**, which survives restarts. If the machine was asleep at that time, the digest is written on the next boot instead — including for days further back.
+Leaving `npm run dev` running automatically saves one **Final EOD digest** per date when due, provided that date has activity. Activity means at least one meal outcome with status **placed, declined, failed, or missed**; all four count, including days when no order was placed. Empty days produce no Final, email, or “digest ready” notification, including during boot catch-up.
 
-- `MACROME_DIGEST_TIME=21:30` (or `"digestTime": "21:30"` in the plan) overrides when it runs.
-- **Summarise today** finalizes the digest immediately; repeated requests return the saved copy without changing it, which is also how to demo it without waiting.
-- `npm run seed-demo -- --digest` fills a day with one placed, one declined and one missed meal so the card and history have something to show.
+The default EOD time is the last meal in that date's schedule plus 90 minutes in the plan timezone: 8:00 PM for a 6:30 PM dinner. The buffer can cross midnight. Finals are saved in `macrome-digests.json` keyed by date. Today then shows **Final**; previous dates appear under **Earlier days** and survive restarts. If the machine was asleep, catch-up saves due digests for dates with logged activity within its look-back window. A saved Final is returned unchanged on repeated requests, even if the day log later changes.
+
+- `MACROME_DIGEST_TIME=21:30` (or `"digestTime": "21:30"` in the plan) overrides when EOD runs.
+- **Save today’s digest (finalize)** is optional early finalization. It is disabled for empty days and already saved Finals. Saving early freezes that summary; it is not a live-status refresh.
+- `GET /api/digests` reads today's live summary or saved Final (`final: false` or `true`) plus saved history. Empty live reads are allowed and write nothing.
+- `POST /api/digests` saves a Final if activity exists, or returns the existing Final unchanged. An empty unsaved date returns HTTP **422** with “Nothing logged for YYYY-MM-DD yet — no digest to save.” Optional `email: true` uses the existing email receipt rules; repeated finalization does not repeat the ready toast.
+- `npm run seed-demo -- --digest` fills a day with one placed, one declined and one missed meal and saves its Final for a demo.
+
+**No button, MCP, or email setup is required:** users who simply leave `npm run dev` running still get automatic Final digests on the dashboard for days with activity.
 
 **Notifications** appear as toasts when a run finishes, when a digest is written, and when slots are marked missed on reconnect. **Desktop alerts** asks the browser for permission so the same messages arrive when the tab isn't in front.
 
@@ -168,9 +174,9 @@ npm run mcp     # stdio; for MCP clients, not for humans
 
 | Tool | What it returns |
 | --- | --- |
-| `get_today_summary` | Macros vs target, spend and every meal for a day (defaults to today; running total before the digest is written) |
-| `list_digests` | Saved end-of-day digests, newest first, one line per day |
-| `send_eod_digest` | Writes a day's digest and emails it, reporting what happened either way |
+| `get_today_summary` | Read-only: the saved Final if present, otherwise a live summary, including empty days. Never saves a Final. |
+| `list_digests` | Only saved Final EOD digests, newest first, one line per day |
+| `send_eod_digest` | Email the saved Final, or save an early Final if activity exists and then email it. Empty unsaved days return `isError` without writing or sending. Email receipts still prevent duplicate sends. |
 
 In Cursor, `.cursor/mcp.json`:
 

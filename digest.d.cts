@@ -16,6 +16,7 @@ export interface Digest {
 export interface DigestPlan { timezone?: string; digestTime?: string; macros?: Macros; meals?: { time: string }[]; schedule?: { day: string; time: string }[] }
 export interface DigestOptions { file?: string; dayLogFile?: string; now?: Date }
 export declare const DIGEST_PATH: string;
+export function hasActivity(entries: DayLogEntry[]): boolean;
 export function buildDigest(plan: DigestPlan, date: string, entries: DayLogEntry[], now?: Date): Digest;
 export function generateDigest(plan: DigestPlan, date: string, options?: DigestOptions): Digest;
 export function ensureDigests(plan: DigestPlan, now?: Date, options?: DigestOptions): Digest[];

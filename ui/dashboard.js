@@ -315,6 +315,9 @@ function mealRows(digest) {
   }).join('');
 }
 
+let canFinalize = false;
+let finalizing = false;
+
 function renderDigests(payload) {
   const digest = payload.today;
   $('#todayTitle').textContent = `Today · ${fmtDateKey(payload.date)}`;
@@ -326,6 +329,13 @@ function renderDigests(payload) {
   $('#todayMeters').innerHTML = MACROS.map((macro) => meter(macro, digest.totals, digest.targets)).join('');
   $('#todayMeals').innerHTML = mealRows(digest);
   $('#todayEmpty').hidden = digest.meals.length > 0;
+  canFinalize = !payload.final && digest.meals.length > 0;
+  $('#summarise').disabled = finalizing || !canFinalize;
+  $('#finalizeHelp').textContent = payload.final
+    ? 'Final digest saved. Repeated requests keep this saved copy.'
+    : digest.meals.length
+      ? 'A Final digest is saved automatically when due. Saving now finalizes this summary early.'
+      : 'Nothing logged today yet — no digest to save. A Final digest is saved automatically when due if a meal outcome is logged.';
 
   $('#historyCard').hidden = !payload.history.length;
   $('#history').innerHTML = payload.history.map((day) => `
@@ -384,6 +394,8 @@ $('#alerts').addEventListener('click', async () => {
 });
 
 $('#summarise').addEventListener('click', async () => {
+  if (!canFinalize || finalizing) return;
+  finalizing = true;
   $('#summarise').disabled = true;
   try {
     await post('/api/digests');
@@ -391,7 +403,8 @@ $('#summarise').addEventListener('click', async () => {
   } catch (err) {
     showError(err.message);
   } finally {
-    $('#summarise').disabled = false;
+    finalizing = false;
+    $('#summarise').disabled = !canFinalize;
   }
 });
 $('#approve').addEventListener('click', () => decide(true));

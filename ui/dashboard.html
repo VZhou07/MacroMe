@@ -79,9 +79,10 @@
         </div>
         <div class="summary-actions">
           <span class="tag" id="todayTag">Live</span>
-          <button type="button" class="btn btn-ghost btn-small" id="summarise">Summarise today</button>
+          <button type="button" class="btn btn-ghost btn-small" id="summarise" disabled aria-describedby="finalizeHelp">Save today’s digest (finalize)</button>
         </div>
       </div>
+      <p class="hint" id="finalizeHelp">Final digests are saved automatically when due if a meal outcome has been logged.</p>
       <div class="meters" id="todayMeters"></div>
       <p class="meter-note">Macro totals cover the agent pick in each placed order, not every line in the cart.</p>
       <ul class="day-meals" id="todayMeals"></ul>
