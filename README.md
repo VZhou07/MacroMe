@@ -76,7 +76,7 @@ total must fit the saved all-in budget; if fees are excluded from the budget,
 the cart's food line totals must fit instead. Recovery stops after eight steps
 or four minutes and explains the unresolved problem without placing an order.
 
-Restaurant discovery scrolls the search results and compares up to 12 restaurants
+Restaurant discovery scrolls the search results and compares up to 30 restaurants
 by default, with a four-minute search budget. `MACROME_MAX_STORES` can set a cap
 between 1 and 30. Slow or unreadable menus are skipped so other restaurants can
 still be considered.
@@ -105,6 +105,6 @@ Other entry points:
 | `OPENROUTER_API_KEY` | The model that picks the meal |
 | `STEEL_PROFILE_ID` | Saved DoorDash login, written by `setup-profile` |
 | `MACROME_CONFIG` | Override the plan file path |
-| `MACROME_MAX_STORES` | Restaurants to compare per run (default 12, max 30) |
+| `MACROME_MAX_STORES` | Restaurants to compare per run (default 30, max 30) |
 
 `macrome-config.json` holds your home address and is gitignored.
