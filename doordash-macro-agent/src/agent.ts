@@ -10,7 +10,9 @@ import { printLiveView, liveViewUrl, dashboardUrl } from "./live-view.js";
 import { emit, enableEvents } from "./events.js";
 import { writeReport } from "./report.js";
 import { prepareCheckout } from './checkout-recovery.js';
-import type { MealConfig, StoreMenu } from "./types.js";
+import { appendEntry } from "../../day-log.cjs";
+import type { DayLogEntry } from "../../day-log.cjs";
+import type { MealConfig, PickedMeal, StoreMenu } from "./types.js";
 
 const isDryRun = process.argv.includes("--dry-run");
 // `--web` makes the agent report progress as machine-readable events and take
@@ -30,8 +32,55 @@ const MOCK_MENUS: StoreMenu[] = [
   },
 ];
 
-export async function runMealOrder(mealConfig: MealConfig, scheduledFor = new Date()): Promise<boolean> {
+export interface RunOptions {
+  /** The queue occurrence this run belongs to, so the day log lines up with the queue. */
+  occurrenceId?: string | null;
+}
+
+/**
+ * Order one meal, then record what happened.
+ *
+ * Every way into the agent — the dashboard, the minute cron, a terminal run —
+ * comes through here, so this is the one place the day log is written. The
+ * record is filled in as the run goes and flushed in `finally`, so a crash
+ * halfway through still leaves a row explaining the gap.
+ */
+export async function runMealOrder(
+  mealConfig: MealConfig,
+  scheduledFor = new Date(),
+  options: RunOptions = {},
+): Promise<boolean> {
+  const record: Partial<DayLogEntry> = {
+    id: options.occurrenceId ?? null,
+    meal: mealConfig.name,
+    eatAt: scheduledFor.toISOString(),
+    status: "failed",
+    note: null,
+  };
+  try {
+    return await orderMeal(mealConfig, scheduledFor, record);
+  } catch (error) {
+    record.note = error instanceof Error ? error.message.split("\n")[0] : String(error);
+    throw error;
+  } finally {
+    // The day log is a report, never a gate: a failure here must not take the
+    // order down with it.
+    try {
+      appendEntry(record);
+    } catch (error) {
+      console.error(`[agent] Could not write the day log: ${error instanceof Error ? error.message : error}`);
+    }
+  }
+}
+
+const pickRecord = (picked: PickedMeal) => ({
+  item: picked.item, restaurant: picked.restaurant, price: picked.price,
+  macros: picked.estimatedMacros, source: picked.source, reasoning: picked.reasoning,
+});
+
+async function orderMeal(mealConfig: MealConfig, scheduledFor: Date, record: Partial<DayLogEntry>): Promise<boolean> {
   const plan = loadPlan();
+  record.timezone = plan.raw.timezone;
   const config = plan.config;
   // The onboarding plan in prose, handed to the meal picker alongside the
   // numeric targets so preferences and delivery context reach the model.
@@ -77,7 +126,13 @@ export async function runMealOrder(mealConfig: MealConfig, scheduledFor = new Da
     console.log("[agent] For a browser link, run: npm run setup-profile  (login) or  npm start  (live order)");
     const result = await pickMeals(MOCK_MENUS, mealConfig, config.macros, config.budgetPerMeal, brief);
     chosenItemId = result.picks[0]?.itemId ?? null;
-    if (result.picks[0]) printOrderSummary(mealConfig, result.picks[0]);
+    if (result.picks[0]) {
+      printOrderSummary(mealConfig, result.picks[0]);
+      record.pick = pickRecord(result.picks[0]);
+    }
+    record.status = "declined";
+    record.dryRun = true;
+    record.note = "Dry run — the agent picked a meal but nothing was ordered.";
     const reportPath = saveReport(result);
     console.log(`[agent] Reasoning report: ${reportPath}`);
     console.log("[agent] DRY RUN complete — no order placed");
@@ -223,6 +278,9 @@ export async function runMealOrder(mealConfig: MealConfig, scheduledFor = new Da
     picked = prepared.picked;
     chosenItemId = picked.itemId;
     checkoutTotal = checkout.checkoutTotal;
+    record.pick = pickRecord(picked);
+    record.cartItems = checkout.cartItems;
+    record.checkoutTotal = checkoutTotal;
     printOrderSummary(mealConfig, picked);
     printCartSummary(checkout);
 
@@ -248,10 +306,14 @@ export async function runMealOrder(mealConfig: MealConfig, scheduledFor = new Da
       const message = placed
         ? "Order placed! Check DoorDash for confirmation."
         : "Could not find the Place Order button — check the live view.";
+      record.status = placed ? "placed" : "failed";
+      record.note = message;
       console.log(`[agent] ${message}`);
       emit({ type: "result", placed, message });
     } else {
       const message = "Order not placed. The items are still in your DoorDash cart.";
+      record.status = "declined";
+      record.note = message;
       console.log(`[agent] ${message}`);
       emit({ type: "result", placed: false, message });
     }
@@ -259,6 +321,8 @@ export async function runMealOrder(mealConfig: MealConfig, scheduledFor = new Da
     return orderPlaced;
   } catch (error) {
     const message = `${orderPlaced ? 'Order was placed, but follow-up failed.' : 'No order placed.'} ${error instanceof Error ? error.message.split('\n')[0] : error}`;
+    record.status = orderPlaced ? 'placed' : 'failed';
+    record.note = message;
     console.log(`[agent] ${message}`);
     emit({ type: 'result', placed: orderPlaced, message });
     return orderPlaced;
@@ -303,7 +367,9 @@ if (import.meta.url === pathToFileURL(process.argv[1]).href) {
     const scheduledFlag = process.argv.indexOf('--scheduled-for');
     const scheduledFor = scheduledFlag < 0 ? new Date() : new Date(process.argv[scheduledFlag + 1]);
     if (!Number.isFinite(scheduledFor.getTime())) throw new Error('Invalid scheduled order date.');
-    await runMealOrder(mealForThisRun(plan.config.meals), scheduledFor);
+    const occurrenceFlag = process.argv.indexOf('--occurrence');
+    const occurrenceId = occurrenceFlag < 0 ? null : process.argv[occurrenceFlag + 1] ?? null;
+    await runMealOrder(mealForThisRun(plan.config.meals), scheduledFor, { occurrenceId });
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
     console.error(`[agent] ${message}`);
