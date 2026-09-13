@@ -1,5 +1,8 @@
 // Typed access to the plan saved by the MacroMe setup UI (macrome-config.json).
-// Usage in the agent:
+// The agent reads this file through doordash-macro-agent/src/plan.ts, which
+// validates it and derives both the agent's UserConfig and the natural-language
+// brief handed to the meal picker. This module is the root-side typed view of
+// the same file:
 //   import { loadMacroMeConfig, getUpcomingOrders } from './macrome-config';
 //   const plan = loadMacroMeConfig();
 //   for (const { order, address, placeOrderAt } of getUpcomingOrders(plan)) { ... }
@@ -42,6 +45,14 @@ export interface ScheduledOrder {
   addressId: string;
 }
 
+/** Food preferences from the onboarding wizard's preferences step. */
+export interface Preferences {
+  cuisines: string[];   // soft preference, used to break ties
+  dietary: string[];    // hard constraints, e.g. "Vegan", "Gluten-free"
+  avoid: string;        // free text, e.g. "shellfish, cilantro"
+  searchQuery: string;  // what the agent types into DoorDash's store search
+}
+
 export interface MacroMeConfig {
   version: 2;
   savedAt: string;
@@ -57,6 +68,7 @@ export interface MacroMeConfig {
   days: DayKey[];
   addresses: Address[];         // 1 to 3
   schedule: ScheduledOrder[];   // every day × meal, sorted by day then time
+  preferences: Preferences;
   timezone: string;
   derived: {
     perMealMacros: Macros;      // daily macros split evenly across meals

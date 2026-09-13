@@ -6,6 +6,7 @@ const STEPS = [
   { id: 'budget', label: 'Budget' },
   { id: 'days', label: 'Delivery days' },
   { id: 'location', label: 'Locations' },
+  { id: 'prefs', label: 'Food preferences' },
   { id: 'review', label: 'Review' },
 ];
 
@@ -32,6 +33,12 @@ const ADDRESS_COLORS = ['#2E5E3E', '#C98A1E', '#4A6FA5'];
 const ADDRESS_NAMES = ['Home', 'Work', 'Other'];
 const DRAFT_KEY = 'macrome-draft-v2';
 
+const CUISINES = ['Japanese', 'Mediterranean', 'Mexican', 'Thai', 'Indian', 'Chinese', 'Korean', 'Italian', 'American', 'Middle Eastern', 'Vietnamese', 'Greek'];
+// Anything selected here is passed to the agent as a hard constraint.
+const DIETS = ['Vegetarian', 'Vegan', 'Pescatarian', 'Gluten-free', 'Dairy-free', 'Nut-free', 'Halal', 'Kosher'];
+// Diets that usefully narrow a DoorDash store search; the rest are filters, not search terms.
+const SEARCHABLE_DIETS = ['Vegan', 'Vegetarian', 'Halal', 'Kosher'];
+
 const uid = () => Math.random().toString(36).slice(2, 9);
 const newAddress = (label) => ({ id: uid(), label, street: '', apt: '', city: '', state: '', zip: '', dropoff: 'door', instructions: '' });
 
@@ -43,6 +50,7 @@ const defaultState = () => ({
   days: ['mon', 'tue', 'wed', 'thu', 'fri'],
   addresses: [newAddress('Home')],
   assignments: {}, // "day|mealId" -> addressId; missing entries use the first address
+  prefs: { cuisines: [], dietary: [], avoid: '', searchQuery: '', searchQueryEdited: false },
 });
 
 let state = loadDraft() || defaultState();
@@ -75,7 +83,10 @@ function minusMinutes(hhmm, mins) {
 function loadDraft() {
   try {
     const raw = localStorage.getItem(DRAFT_KEY);
-    return raw ? { ...defaultState(), ...JSON.parse(raw) } : null;
+    if (!raw) return null;
+    const saved = JSON.parse(raw);
+    // Shallow merge, so sections added after a draft was saved need a backfill.
+    return { ...defaultState(), ...saved, prefs: { ...defaultState().prefs, ...(saved.prefs || {}) } };
   } catch { return null; }
 }
 function saveDraft() {
@@ -89,6 +100,19 @@ function perOrderBudget() {
   if (period === 'meal') return num(amount);
   if (period === 'day') return num(amount) / state.meals.length;
   return ordersPerWeek() ? num(amount) / ordersPerWeek() : 0;
+}
+
+// What's actually left for food once DoorDash's fees and the tip come out of a
+// per-order budget. Mirrors cartBudget() in doordash-macro-agent/src/plan.ts.
+const DELIVERY_FEE_ESTIMATE = 3.99;
+const SERVICE_FEE_PERCENT = 15;
+const MIN_CART_BUDGET = 5;
+
+function foodBudget() {
+  const perOrder = perOrderBudget();
+  if (!state.budget.includesFeesAndTip) return perOrder;
+  const afterDelivery = perOrder - DELIVERY_FEE_ESTIMATE;
+  return Math.max(MIN_CART_BUDGET, afterDelivery / (1 + (num(state.budget.tipPercent) + SERVICE_FEE_PERCENT) / 100));
 }
 
 function perMealMacros() {
@@ -173,11 +197,17 @@ function renderBudget() {
   field('tip').value = String(b.tipPercent);
 
   const perOrder = perOrderBudget();
+  const food = foodBudget();
   const weekly = perOrder * ordersPerWeek();
+  const tight = food < 10;
   $('#budgetStats').innerHTML = `
-    <div class="stat ${perOrder < 12 ? 'warn' : ''}"><b>${money(perOrder)}</b>per order${perOrder < 12 ? ' · tight after fees' : ''}</div>
-    <div class="stat"><b>${money(weekly)}</b>per week</div>
-    <div class="stat"><b>${money(weekly * 52 / 12)}</b>per month</div>`;
+    <div class="stat"><b>${money(perOrder)}</b>per order</div>
+    <div class="stat ${tight ? 'warn' : ''}"><b>${money(food)}</b>${b.includesFeesAndTip ? 'for food, after fees and tip' : 'for food'}</div>
+    <div class="stat"><b>${money(weekly)}</b>per week</div>`;
+  $('#budgetNote').innerHTML = tight
+    ? `Most DoorDash mains cost more than ${money(food)}, so the agent may not find anything it can order. Raise the budget, order fewer meals a day, or untick the box above.`
+    : '';
+  $('#budgetNote').hidden = !tight;
 }
 
 function renderDays() {
@@ -253,6 +283,40 @@ function renderAssignments() {
     .map((a) => `<div class="stat"><b>${counts[a.id]}</b>${esc(a.label || 'Unnamed')} orders / week</div>`).join('');
 }
 
+// What the agent types into DoorDash's store search. Kept in sync with the
+// chips unless the user has typed their own query.
+function derivedSearchQuery() {
+  const { cuisines, dietary } = state.prefs;
+  const parts = [];
+  if (cuisines.length === 1) parts.push(cuisines[0]);
+  const diet = dietary.find((d) => SEARCHABLE_DIETS.includes(d));
+  if (diet) parts.push(diet);
+  parts.push('healthy');
+  return parts.join(' ').toLowerCase();
+}
+
+function effectiveSearchQuery() {
+  const typed = state.prefs.searchQuery.trim();
+  return state.prefs.searchQueryEdited && typed ? typed : derivedSearchQuery();
+}
+
+function renderPrefs() {
+  const chip = (value, on) => `<button type="button" class="chip" data-pref-chip="${esc(value)}" aria-pressed="${on}">${esc(value)}</button>`;
+  $('#cuisineChips').innerHTML = CUISINES.map((c) => chip(c, state.prefs.cuisines.includes(c))).join('');
+  $('#dietChips').innerHTML = DIETS.map((d) => chip(d, state.prefs.dietary.includes(d))).join('');
+  if (document.activeElement !== field('avoid')) field('avoid').value = state.prefs.avoid;
+  if (document.activeElement !== field('searchQuery')) field('searchQuery').value = effectiveSearchQuery();
+}
+
+function prefsSummary() {
+  const { cuisines, dietary, avoid } = state.prefs;
+  const bits = [];
+  if (cuisines.length) bits.push(cuisines.join(', '));
+  if (dietary.length) bits.push(`${dietary.join(', ')} only`);
+  if (avoid.trim()) bits.push(`no ${avoid.trim()}`);
+  return bits.length ? bits.join(' · ') : 'No restrictions';
+}
+
 function renderReview() {
   const m = state.macros;
   const counts = ordersPerAddress();
@@ -263,9 +327,10 @@ function renderReview() {
   const items = [
     ['macros', 'Daily macros', `${calories(m).toLocaleString()} cal`, `${m.protein}g protein · ${m.carbs}g carbs · ${m.fat}g fat`],
     ['meals', 'Meals', `${state.meals.length} a day`, mealsByTime().map((x) => `${esc(x.name)} ${fmtTime(x.time)}`).join(' · ')],
-    ['budget', 'Budget', `${money(num(state.budget.amount))} per ${state.budget.period}`, `≈ ${money(perOrderBudget())} per order · ${state.budget.tipPercent}% tip${state.budget.includesFeesAndTip ? ' · fees included' : ''}`],
+    ['budget', 'Budget', `${money(num(state.budget.amount))} per ${state.budget.period}`, `≈ ${money(perOrderBudget())} per order · ${money(foodBudget())} for food · ${state.budget.tipPercent}% tip${state.budget.includesFeesAndTip ? ' · fees included' : ''}`],
     ['days', 'Days', `${ordersPerWeek()} orders a week`, dayNames],
     ['location', 'Deliver to', plural(state.addresses.length, 'address'), `<ul class="addr-lines">${addrLines}</ul>`, 'wide'],
+    ['prefs', 'Food', esc(effectiveSearchQuery()), esc(prefsSummary())],
   ];
   $('#review').innerHTML = items.map(([step, title, main, sub, cls = '']) => `
     <div class="card ${cls}">
@@ -280,10 +345,10 @@ function render() {
   $$('.step').forEach((s) => s.classList.toggle('active', s.dataset.step === stepId));
   $('#nav').hidden = stepId === 'done';
   $('#back').style.visibility = current === 0 ? 'hidden' : 'visible';
-  $('#next').textContent = stepId === 'review' ? 'Launch agent' : stepId === 'location' ? 'Review plan' : 'Continue';
+  $('#next').textContent = stepId === 'review' ? 'Launch agent' : stepId === 'prefs' ? 'Review plan' : 'Continue';
   $$('.eyebrow').forEach((e, i) => { e.textContent = `Step ${i + 1} of ${STEPS.length}`; });
   renderStepList();
-  ({ macros: renderMacros, meals: renderMeals, budget: renderBudget, days: renderDays, location: renderAddresses, review: renderReview }[stepId] || (() => {}))();
+  ({ macros: renderMacros, meals: renderMeals, budget: renderBudget, days: renderDays, location: renderAddresses, prefs: renderPrefs, review: renderReview }[stepId] || (() => {}))();
 }
 
 // ---------- validation ----------
@@ -312,8 +377,14 @@ function validate(stepId) {
   if (stepId === 'budget') {
     if (num(state.budget.amount) <= 0) return fail('Enter a budget above $0.', 'budget');
     if (perOrderBudget() < 5) return fail(`That works out to ${money(perOrderBudget())} per order, which won't cover DoorDash fees. Raise the budget or order fewer meals.`, 'budget');
+    if (foodBudget() <= MIN_CART_BUDGET) return fail(`After fees and tip that leaves about ${money(foodBudget())} for the food itself, which won't buy a meal. Raise the budget or order fewer meals a day.`, 'budget');
   }
   if (stepId === 'days' && !state.days.length) return 'Pick at least one day.';
+  if (stepId === 'prefs') {
+    if (!effectiveSearchQuery().trim()) return fail('Give the agent something to search DoorDash for.', 'searchQuery');
+    const conflict = ['Vegan', 'Vegetarian', 'Pescatarian'].filter((d) => state.prefs.dietary.includes(d));
+    if (conflict.length > 1) return `${conflict.join(' and ')} can't both apply. Pick the one that fits.`;
+  }
   if (stepId === 'location') {
     const mark = (i, ...keys) => keys.forEach((k) => $(`[data-addr="${i}"][data-key="${k}"]`)?.classList.add('invalid'));
     const labels = state.addresses.map((a) => a.label.trim().toLowerCase());
@@ -359,6 +430,12 @@ function buildConfig() {
     days: selectedDays().map(([k]) => k),
     addresses,
     schedule,
+    preferences: {
+      cuisines: [...state.prefs.cuisines],
+      dietary: [...state.prefs.dietary],
+      avoid: state.prefs.avoid.trim(),
+      searchQuery: effectiveSearchQuery(),
+    },
     timezone: Intl.DateTimeFormat().resolvedOptions().timeZone,
     derived: {
       perMealMacros: perMealMacros(),
@@ -403,8 +480,9 @@ async function launch() {
     <li><span class="when">${dateFmt.format(at)} · ${fmtTime(order.time)}</span>
     <span class="meta">${esc(order.meal)} to ${esc(addrLabel(order.addressId))} · up to ${money(config.derived.perOrderBudget)} · ordered ${fmtTime(order.orderAt)}</span></li>`).join('');
   $('#doneMsg').textContent = savedToServer
-    ? 'Plan saved to macrome-config.json. Here are your next orders.'
+    ? 'Plan saved. Your agent can start ordering from the dashboard.'
     : "Couldn't reach the local server, so the plan is only saved in this browser. Run `npm run ui` and launch again so the agent can read it.";
+  $('#openDashboard').hidden = !savedToServer;
   $('#jsonOut').textContent = JSON.stringify(config, null, 2);
   current = STEPS.length;
   render();
@@ -465,6 +543,16 @@ document.addEventListener('click', (e) => {
     renderDays();
   }
 
+  const prefChip = e.target.closest('[data-pref-chip]');
+  if (prefChip) {
+    const key = prefChip.closest('#dietChips') ? 'dietary' : 'cuisines';
+    const value = prefChip.dataset.prefChip;
+    const list = state.prefs[key];
+    state.prefs[key] = list.includes(value) ? list.filter((x) => x !== value) : [...list, value];
+    showError(null);
+    renderPrefs();
+  }
+
   const drop = e.target.closest('[data-addr-dropoff]');
   if (drop) {
     state.addresses[+drop.dataset.addrDropoff].dropoff = drop.dataset.value;
@@ -518,6 +606,12 @@ form.addEventListener('input', (e) => {
       selectedDays().forEach(([day]) => state.meals.forEach((m) => { state.assignments[`${day}|${m.id}`] = t.value; }));
       renderAssignments();
     }
+  }
+  else if (t.name === 'avoid') state.prefs.avoid = t.value;
+  else if (t.name === 'searchQuery') {
+    // Once they type their own query, stop overwriting it from the chips.
+    state.prefs.searchQuery = t.value;
+    state.prefs.searchQueryEdited = true;
   }
   else if (t.name === 'lead') { state.orderLeadMinutes = +t.value; renderMeals(); }
   else if (t.name === 'budget') { state.budget.amount = t.value === '' ? '' : +t.value; renderBudget(); }

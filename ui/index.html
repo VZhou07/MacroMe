@@ -26,7 +26,7 @@
 
       <!-- 1 · MACROS -->
       <section class="step" data-step="macros">
-        <p class="eyebrow">Step 1 of 6</p>
+        <p class="eyebrow">Step 1 of 7</p>
         <h2>What are your daily macro goals?</h2>
         <p class="lede">Enter your daily targets, such as the ones from your dietitian, coach or tracking app. The agent picks meals that add up to them across your day.</p>
 
@@ -61,7 +61,7 @@
 
       <!-- 2 · MEALS -->
       <section class="step" data-step="meals">
-        <p class="eyebrow">Step 2 of 6</p>
+        <p class="eyebrow">Step 2 of 7</p>
         <h2>How many meals a day, and when?</h2>
         <p class="lede">Set when you want to eat. The agent places each order early enough for it to arrive on time.</p>
 
@@ -92,7 +92,7 @@
 
       <!-- 3 · BUDGET -->
       <section class="step" data-step="budget">
-        <p class="eyebrow">Step 3 of 6</p>
+        <p class="eyebrow">Step 3 of 7</p>
         <h2>What's your budget?</h2>
         <p class="lede">The agent won't check out a cart that goes over this.</p>
 
@@ -126,12 +126,13 @@
           </div>
 
           <div class="stats" id="budgetStats"></div>
+          <p class="budget-note" id="budgetNote" hidden></p>
         </div>
       </section>
 
       <!-- 4 · DAYS -->
       <section class="step" data-step="days">
-        <p class="eyebrow">Step 4 of 6</p>
+        <p class="eyebrow">Step 4 of 7</p>
         <h2>Which days should we order?</h2>
         <p class="lede">Leave out days you're cooking, eating out or traveling.</p>
 
@@ -149,7 +150,7 @@
 
       <!-- 5 · LOCATION -->
       <section class="step" data-step="location">
-        <p class="eyebrow">Step 5 of 6</p>
+        <p class="eyebrow">Step 5 of 7</p>
         <h2>Where should it be delivered?</h2>
         <p class="lede">Save up to three addresses, then pick where each meal goes.</p>
 
@@ -171,9 +172,40 @@
         </div>
       </section>
 
-      <!-- 6 · REVIEW -->
+      <!-- 6 · FOOD PREFERENCES -->
+      <section class="step" data-step="prefs">
+        <p class="eyebrow">Step 6 of 7</p>
+        <h2>What should we look for?</h2>
+        <p class="lede">This is what the agent searches DoorDash for, and what it rules out when picking a dish.</p>
+
+        <div class="card">
+          <span class="field-title">Cuisines you like <small class="hint-inline">optional</small></span>
+          <span class="hint">Pick a few. The agent leans towards these when the macros work out either way.</span>
+          <div class="chips spaced-top" id="cuisineChips" role="group" aria-label="Preferred cuisines"></div>
+        </div>
+
+        <div class="card">
+          <span class="field-title">Dietary requirements</span>
+          <span class="hint">These are hard rules — the agent will never order something that breaks one.</span>
+          <div class="chips spaced-top" id="dietChips" role="group" aria-label="Dietary requirements"></div>
+
+          <label class="field spaced">
+            <span>Anything else to avoid <small>optional</small></span>
+            <textarea name="avoid" rows="2" placeholder="shellfish, cilantro, anything deep fried"></textarea>
+          </label>
+        </div>
+
+        <div class="card compact">
+          <label class="field" for="searchQuery">
+            <span>DoorDash search <small>we fill this in from your picks — edit it if you want</small></span>
+            <input type="text" id="searchQuery" name="searchQuery" maxlength="60" placeholder="healthy">
+          </label>
+        </div>
+      </section>
+
+      <!-- 7 · REVIEW -->
       <section class="step" data-step="review">
-        <p class="eyebrow">Step 6 of 6</p>
+        <p class="eyebrow">Step 7 of 7</p>
         <h2>Look good?</h2>
         <p class="lede">Check your plan. When you're ready, launch the agent.</p>
         <div class="review-grid" id="review"></div>
@@ -191,6 +223,7 @@
         </details>
         <div class="nav">
           <button type="button" class="btn btn-ghost" id="editPlan">Edit plan</button>
+          <a class="btn btn-primary" id="openDashboard" href="/" hidden>Open dashboard</a>
         </div>
       </section>
 

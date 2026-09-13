@@ -6,7 +6,7 @@ import { loadPlan } from "./plan.js";
 import { addItemToCart, findStores, goToCheckout, placeOrder, scrapeMenu } from "./doordash.js";
 import { pickMeals } from "./macro-picker.js";
 import { printOrderSummary, promptApproval } from "./notifier.js";
-import { printLiveView, liveViewUrl } from "./live-view.js";
+import { printLiveView, liveViewUrl, dashboardUrl } from "./live-view.js";
 import { emit, enableEvents } from "./events.js";
 import { writeReport } from "./report.js";
 import type { MealConfig, StoreMenu } from "./types.js";
@@ -102,7 +102,7 @@ export async function runMealOrder(mealConfig: MealConfig): Promise<void> {
     // stripped-down browser as a bot and serves a verification page instead.
   });
   printLiveView("agent", session);
-  emit({ type: "live-view", url: liveViewUrl(session), sessionId: session.id });
+  emit({ type: "live-view", url: liveViewUrl(session), dashboardUrl: dashboardUrl(session), sessionId: session.id });
 
   const browser = await chromium.connectOverCDP(session.websocketUrl);
   const context = browser.contexts()[0];
@@ -119,12 +119,14 @@ export async function runMealOrder(mealConfig: MealConfig): Promise<void> {
     const stores = await findStores(page, config.searchQuery, config.maxStores);
     if (stores.length === 0) throw new Error("No stores found — the saved profile may be logged out. Re-run `npm run setup-profile`.");
 
+    let storesRead = 0;
     for (const store of stores) {
       // A fresh tab per store, closed afterwards, frees the memory a long
       // menu scroll builds up — reusing one tab crashed the browser.
       const storePage = await context.newPage();
       try {
         const menu = await scrapeMenu(storePage, store, config.budgetPerMeal);
+        storesRead += 1;
         console.log(`[agent] ${menu.store}: ${menu.items.length} items within budget`);
         emit({ type: "status", message: `Read ${menu.items.length} items from ${menu.store}` });
         if (menu.items.length > 0) menus.push(menu);
@@ -135,7 +137,22 @@ export async function runMealOrder(mealConfig: MealConfig): Promise<void> {
         await storePage.close().catch(() => {});
       }
     }
-    if (menus.length === 0) throw new Error("Couldn't read any restaurant menus.");
+    if (menus.length === 0) {
+      // Distinguish "the scrape failed" from "the scrape worked but nothing was
+      // affordable" — they need completely different fixes from the user.
+      if (storesRead > 0) {
+        const perOrder = plan.raw.derived.perOrderBudget;
+        throw new Error(
+          `Nothing on the menus costs $${config.budgetPerMeal.toFixed(2)} or less, so there was nothing to pick. ` +
+          `Your budget works out to $${perOrder.toFixed(2)} per order` +
+          (plan.raw.budget.includesFeesAndTip
+            ? `, and because that has to cover delivery, service fees and a ${plan.raw.budget.tipPercent}% tip, only $${config.budgetPerMeal.toFixed(2)} of it is left for food. `
+            : `. `) +
+          `Raise the budget, order fewer meals a day, or untick "budget includes fees and tip" in the setup.`
+        );
+      }
+      throw new Error("Couldn't read any restaurant menus.");
+    }
 
     const result = await pickMeals(menus, mealConfig, config.macros, config.budgetPerMeal, brief);
 

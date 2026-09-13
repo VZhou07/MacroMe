@@ -5,7 +5,7 @@
 // only when the agent runs under `--web`.
 export type AgentEvent =
   | { type: "status"; message: string }
-  | { type: "live-view"; url: string; sessionId: string }
+  | { type: "live-view"; url: string; dashboardUrl: string; sessionId: string }
   | { type: "picked"; item: string; restaurant: string; price: number; macros: unknown; reasoning: string; source: string }
   | { type: "approval-request"; item: string; restaurant: string; price: number; checkoutTotal: string; macros: unknown; reasoning: string; reportPath: string | null }
   | { type: "result"; placed: boolean; message: string }

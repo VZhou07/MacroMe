@@ -1,11 +1,15 @@
 {
   "name": "goosegpt",
   "version": "1.0.0",
-  "description": "",
+  "description": "MacroMe: a macro-aware DoorDash ordering agent with a web onboarding wizard and live dashboard.",
   "main": "index.js",
   "scripts": {
-    "test": "echo \"Error: no test specified\" && exit 1",
-    "dev": "node server.js"
+    "dev": "node server.js",
+    "ui": "node server.js",
+    "agent": "npm start --prefix doordash-macro-agent",
+    "schedule": "npm run schedule --prefix doordash-macro-agent",
+    "setup-profile": "npm run setup-profile --prefix doordash-macro-agent",
+    "test": "echo \"Error: no test specified\" && exit 1"
   },
   "repository": {
     "type": "git",

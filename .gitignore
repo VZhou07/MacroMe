@@ -19,3 +19,5 @@ test-results/
 .venv/
 venv/
 node_modules/
+
+doordash-macro-agent/reports/

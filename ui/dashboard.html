@@ -1,0 +1,78 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>MacroMe · Your agent</title>
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'><circle cx='8' cy='8' r='7' fill='%23E0562F'/></svg>">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=DM+Sans:opsz,wght@9..40,400;9..40,500;9..40,700&family=Fraunces:opsz,wght@9..144,600;9..144,700&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+<div class="shell">
+  <aside class="rail">
+    <div class="brand"><span class="logo" aria-hidden="true">●</span>MacroMe</div>
+    <p class="tagline">Your macros, delivered on autopilot.</p>
+    <div class="rail-plan" id="railPlan"></div>
+    <p class="rail-foot"><a href="/setup" class="rail-link">Edit plan</a></p>
+  </aside>
+
+  <main class="stage wide-stage">
+    <header class="dash-head">
+      <div>
+        <h2 id="dashTitle">Your agent is ready.</h2>
+        <p class="lede" id="dashSub">Pick a meal and it will order it on DoorDash for you.</p>
+      </div>
+      <div class="dash-actions">
+        <label class="sr-only" for="mealPick">Meal to order</label>
+        <select id="mealPick"></select>
+        <button type="button" class="btn btn-primary" id="runNow">Run now</button>
+        <button type="button" class="btn btn-ghost" id="stopRun" hidden>Stop</button>
+      </div>
+    </header>
+
+    <p class="error" id="error" role="alert" hidden></p>
+
+    <div class="status-strip" id="statusStrip" hidden>
+      <span class="pulse" id="statusDot" aria-hidden="true"></span>
+      <span id="statusText">Starting…</span>
+    </div>
+
+    <!-- Approval: the agent blocks at checkout until one of these is clicked. -->
+    <section class="card approval" id="approval" hidden>
+      <h3>Approve this order?</h3>
+      <div class="approval-body" id="approvalBody"></div>
+      <div class="nav">
+        <button type="button" class="btn btn-ghost" id="reject">Don't order</button>
+        <button type="button" class="btn btn-primary" id="approve">Place order</button>
+      </div>
+    </section>
+
+    <section class="card result" id="result" hidden></section>
+
+    <section class="viewer" id="viewer">
+      <div class="viewer-head">
+        <span class="field-title">Live browser</span>
+        <a id="popOut" class="link" href="#" target="_blank" rel="noopener" hidden>Open in a new tab</a>
+      </div>
+      <div class="viewer-frame" id="viewerFrame">
+        <p class="viewer-empty" id="viewerEmpty">The agent's browser appears here once a run starts.</p>
+      </div>
+    </section>
+
+    <details class="json log-wrap" id="logWrap">
+      <summary>Agent log</summary>
+      <pre id="logOut"></pre>
+    </details>
+
+    <section class="card upcoming-card">
+      <span class="field-title">Next scheduled orders</span>
+      <ul class="upcoming" id="upcoming"></ul>
+    </section>
+  </main>
+</div>
+<script src="dashboard.js"></script>
+</body>
+</html>
