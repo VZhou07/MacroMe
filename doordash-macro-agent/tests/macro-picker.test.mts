@@ -36,7 +36,7 @@ test('model timeout falls back to heuristic menu picks instead of failing the ru
   const result = await pickMeals(menus, meal, macros, 20, '', {client,nutrition,sleep});
   assert.equal(calls,2);
   assert.ok(result.picks.length >= 1);
-  assert.match(result.picks[0].reasoning, /Model picker failed|timed out|heuristic|ranked/i);
+  assert.match(result.picks[0].reasoning, /Picked .+ for ~/i);
 });
 
 test('rate-limit failures fall back after one attempt', async () => {

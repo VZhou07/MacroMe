@@ -42,10 +42,11 @@ export async function closePage(page: Page, phase: string): Promise<void> {
 }
 
 /** Retry only navigation/readiness, never a cart mutation or Place Order. */
-export async function navigate(page: Page, url: string, selector: string, phase: string,
+export async function navigate(page: Page, url: string, selector: string | string[], phase: string,
   options: { attemptMs?: number; backoffMs?: number } = {}): Promise<void> {
   const browser = page.context().browser();
   const attemptMs = options.attemptMs ?? 15000;
+  const selectors = Array.isArray(selector) ? selector : [selector];
   let failure: unknown;
   for (let attempt = 1; attempt <= 2; attempt++) {
     assertConnected(browser);
@@ -55,12 +56,22 @@ export async function navigate(page: Page, url: string, selector: string, phase:
     try {
       await bounded((async () => {
         // Commit avoids waiting for slow third-party resources. Readiness is
-        // established by the actual store/search selector, not a load event.
-        await page.goto(url, { waitUntil: 'commit', timeout: Math.min(10000, attemptMs), signal: controller.signal });
-        if (await page.getByText(/session ended/i).first().isVisible()) {
+        // established by store/search selectors, not a full load event.
+        const gotoMs = Math.min(15000, Math.max(8000, Math.floor(attemptMs * 0.45)));
+        await page.goto(url, { waitUntil: 'domcontentloaded', timeout: gotoMs, signal: controller.signal }).catch(async () => {
+          // Some Steel/DoorDash loads never reach networkidle/domcontentloaded cleanly;
+          // commit is enough if a readiness selector appears afterward.
+          await page.goto(url, { waitUntil: 'commit', timeout: gotoMs, signal: controller.signal });
+        });
+        if (await page.getByText(/session ended/i).first().isVisible().catch(() => false)) {
           throw new BrowserUnavailableError(`${phase}: Steel reports that the session ended. Start a new run.`);
         }
-        await page.waitForSelector(selector, { state: 'attached', timeout: Math.min(5000, attemptMs), signal: controller.signal });
+        if (await page.getByText(/verify you are human|attention required|access denied/i).first().isVisible().catch(() => false)) {
+          throw new PageWorkError(phase, 'DoorDash showed a bot-check or access wall');
+        }
+        const readyMs = Math.max(8000, attemptMs - gotoMs - 500);
+        // Comma-union: first matching readiness signal wins (store shell or menu card).
+        await page.waitForSelector(selectors.join(', '), { state: 'attached', timeout: readyMs, signal: controller.signal });
       })(), attemptMs, phase);
       return;
     } catch (error) {

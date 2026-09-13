@@ -45,7 +45,10 @@ export async function findStores(page: Page, query: string, max: number): Promis
     // so cut the name off where the rating starts.
     const name = text.split("\n")[0].replace(/\d\.\d.*$/, "").trim();
     if (!name) continue;
-    if (!stores.has(id)) stores.set(id, { name, url: `${BASE}/store/${id}/` });
+    // Keep DoorDash's full store path (slug + id). A bare /store/<id>/ often
+    // redirects slowly or lands on a shell without menu cards.
+    const clean = href.split(/[?#]/)[0].replace(/\/?$/, "/");
+    if (!stores.has(id)) stores.set(id, { name, url: clean.startsWith("http") ? clean : `${BASE}${clean}` });
     if (stores.size >= max) break;
   }
   stagnant = stores.size === before ? stagnant + 1 : 0;
@@ -59,21 +62,32 @@ export async function findStores(page: Page, query: string, max: number): Promis
 
 export async function scrapeMenu(page: Page, store: { name: string; url: string }, budget: number): Promise<StoreMenu> {
   await focus(page);
-  await navigate(page, store.url, '[data-testid="MenuItem"]', `${store.name} / menu`);
+  // Menu cards are virtualized and often missing until the store shell paints.
+  // Wait for the store header OR a menu card, then scroll until cards appear —
+  // same pattern addItemToCart already uses successfully.
+  await navigate(
+    page,
+    store.url,
+    ['[data-testid="MenuItem"]', '[data-testid="storeInfo"]', '[data-testid="StoreMenuItemPrice"]'],
+    `${store.name} / menu`,
+    { attemptMs: 35000 },
+  );
 
-  // The menu is virtualized, so collect items while scrolling rather than
-  // reading the DOM once at the end.
   const items = new Map<string, MenuItem>();
   let stagnant = 0;
-  for (let i = 0; i < 16 && stagnant < 3 && items.size < MAX_ITEMS_PER_STORE; i++) {
+  let sawCard = false;
+  for (let i = 0; i < 28 && stagnant < 4 && items.size < MAX_ITEMS_PER_STORE; i++) {
     const batch = await page.$$eval('[data-testid="MenuItem"]', (els) =>
       els.map((el) => ({
         id: el.getAttribute("data-item-id") ?? "",
-        name: el.querySelector('[data-telemetry-id="storeMenuItem.title"]')?.textContent?.trim() ?? "",
+        name: el.querySelector('[data-telemetry-id="storeMenuItem.title"]')?.textContent?.trim()
+          ?? el.querySelector('[data-testid="StoreMenuItemName"]')?.textContent?.trim()
+          ?? "",
         description: el.querySelector('[data-telemetry-id="storeMenuItem.subtitle"]')?.textContent?.trim() ?? "",
         priceText: el.querySelector('[data-testid="StoreMenuItemPrice"]')?.textContent ?? "",
       }))
-    );
+    ).catch(() => [] as { id: string; name: string; description: string; priceText: string }[]);
+    if (batch.length) sawCard = true;
     const before = items.size;
     for (const b of batch) {
       const price = parsePrice(b.priceText);
@@ -81,8 +95,15 @@ export async function scrapeMenu(page: Page, store: { name: string; url: string 
       items.set(b.id, { id: b.id, name: b.name, description: b.description.slice(0, 200), price });
     }
     stagnant = items.size === before ? stagnant + 1 : 0;
-    await page.mouse.wheel(0, 1200);
-    await page.waitForTimeout(600);
+    await page.mouse.wheel(0, 1400);
+    await page.waitForTimeout(700);
+  }
+
+  if (!sawCard) {
+    const title = await page.title().catch(() => "");
+    const href = page.url();
+    console.log(`[doordash] ${store.name}: no MenuItem cards after scroll (title=${JSON.stringify(title)} url=${href})`);
+    throw new Error(`${store.name}: menu cards never appeared (possible login wall or empty store page)`);
   }
 
   return { store: store.name, url: store.url, items: [...items.values()] };

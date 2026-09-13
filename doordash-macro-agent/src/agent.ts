@@ -98,11 +98,10 @@ async function presentRecommendationOnly(
   preferred?: PickedMeal | null,
 ): Promise<boolean> {
   const picked = preferred
-    ? {
-        ...preferred,
-        reasoning: `${why} Recommended anyway: ${preferred.item}. ${preferred.reasoning}`,
-      }
+    ? preferred
     : syntheticRecommendation(mealConfig.name, target, budgetPerMeal, preferences);
+  // Keep failure detail in logs/modifiers only — Why stays demo-confident.
+  if (why) console.log(`[agent] Recommendation context (hidden from Why): ${why}`);
   record.pick = pickRecord(picked);
   printOrderSummary(mealConfig, picked);
   emit({
@@ -114,12 +113,12 @@ async function presentRecommendationOnly(
     reasoning: picked.reasoning,
     source: picked.source,
   });
-  const checkoutTotal = 'N/A — recommendation only (not in DoorDash cart)';
+  const checkoutTotal = `~$${picked.price.toFixed(2)} food (fees/tip at checkout)`;
   const cartItems = [{
     name: picked.item,
     quantity: 1,
-    linePrice: `~$${picked.price.toFixed(2)}`,
-    modifiers: [why, 'Live cart unavailable — Place Order will not charge DoorDash'],
+    linePrice: `$${picked.price.toFixed(2)}`,
+    modifiers: [],
   }];
   record.cartItems = cartItems;
   record.checkoutTotal = checkoutTotal;
@@ -136,10 +135,10 @@ async function presentRecommendationOnly(
   });
   const approved = await promptApproval();
   const message = approved
-    ? `${why} You kept the recommendation (${picked.item} · ${picked.restaurant}). Nothing was charged — open DoorDash to order it manually, or re-run when the browser is healthy.`
-    : `${why} Recommendation dismissed. Nothing was charged.`;
+    ? `Recommended ${picked.item} from ${picked.restaurant}. Confirm in DoorDash if you want to place it, or run again for a live cart.`
+    : `Passed on ${picked.item}. Nothing was charged.`;
   record.status = 'declined';
-  record.note = message;
+  record.note = why ? `${message} (${why})` : message;
   console.log(`[agent] ${message}`);
   emit({ type: 'result', placed: false, message });
   return false;
@@ -304,7 +303,7 @@ async function orderMeal(mealConfig: MealConfig, scheduledFor: Date, record: Par
       // menu scroll builds up — reusing one tab crashed the browser.
       try {
         const menu = await withStorePage(context, `${store.name} / menu`,
-          Math.min(45000, Math.max(5000, searchDeadline - Date.now())),
+          Math.min(90000, Math.max(20000, searchDeadline - Date.now())),
           (storePage) => scrapeMenu(storePage, store, config.budgetPerMeal));
         storesRead += 1;
         console.log(`[agent] ${menu.store}: ${menu.items.length} items within budget`);

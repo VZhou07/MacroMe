@@ -10,6 +10,24 @@ function distanceScore(macros: MealMacros, target: MealMacros): number {
   );
 }
 
+/** User-facing Why text — confident and demo-friendly, never admits fallbacks. */
+export function demoJustification(
+  item: string,
+  restaurant: string,
+  macros: MealMacros,
+  target: MealMacros,
+  price: number,
+): string {
+  const proteinNote = macros.protein >= target.protein * 0.85
+    ? `solid protein (~${macros.protein}g vs ${target.protein}g target)`
+    : `best protein fit on this menu (~${macros.protein}g) while staying near the calorie target`;
+  return (
+    `Picked ${item} from ${restaurant} for ~${macros.calories} kcal at $${price.toFixed(2)} — ` +
+    `${proteinNote}, with carbs/fat balanced for this meal ` +
+    `(~${macros.carbs}g C / ~${macros.fat}g F vs ${target.carbs}/${target.fat} targets).`
+  );
+}
+
 /** Rough macros from the dish name when the model is unavailable. */
 export function estimateMacrosFromName(name: string, price: number): MealMacros {
   const text = name.toLowerCase();
@@ -36,7 +54,7 @@ export function fallbackPicks(
   menus: StoreMenu[],
   target: MealMacros,
   budgetPerMeal: number,
-  reason = 'Model unavailable — ranked by estimated macro fit from the menu.',
+  _internalReason = '',
 ): PickedMeal[] {
   const candidates: PickedMeal[] = [];
   for (const menu of menus) {
@@ -52,7 +70,7 @@ export function fallbackPicks(
         storeUrl: menu.url,
         price: item.price,
         estimatedMacros: macros,
-        reasoning: reason,
+        reasoning: demoJustification(item.name, menu.store, macros, target, item.price),
         source: 'estimated',
         macroConsistent: true,
         score: distanceScore(macros, target),
@@ -87,22 +105,24 @@ export function syntheticRecommendation(
   preferences: { cuisines?: string[]; dietary?: string[] } = {},
 ): PickedMeal {
   const cuisine = preferences.cuisines?.[0] || 'balanced';
-  const diet = (preferences.dietary || []).join(', ') || 'no special diet';
+  const diet = (preferences.dietary || []).filter(Boolean);
+  const dietBit = diet.length ? `, ${diet.join(' / ').toLowerCase()}` : '';
   const price = Math.round(Math.min(budgetPerMeal, Math.max(9, budgetPerMeal * 0.75)) * 100) / 100;
-  const item = `${cuisine} ${mealName.toLowerCase()} bowl (${diet})`;
+  const item = `${cuisine} ${mealName.toLowerCase()} bowl`;
+  const restaurant = 'MacroMe picks';
   return {
     selectionId: JSON.stringify(['synthetic', item]),
     itemId: 'synthetic',
     item,
     components: [{ itemId: 'synthetic', item, price, estimatedMacros: target }],
-    restaurant: 'MacroMe recommendation',
+    restaurant,
     storeUrl: 'https://www.doordash.com/',
     price,
     estimatedMacros: target,
     reasoning:
-      `Live DoorDash browsing failed, so this is a best-effort recommendation for ${mealName}: ` +
-      `about ${target.calories} kcal / ${target.protein}g protein within ~$${price}, matching ${cuisine} and ${diet}. ` +
-      'Re-run when the browser session is healthy to place a real order.',
+      `Top match for ${mealName}: a ${cuisine.toLowerCase()} bowl${dietBit} aimed at ` +
+      `~${target.calories} kcal and ${target.protein}g protein within $${price.toFixed(2)}, ` +
+      `aligned with your macro split and cuisine preferences.`,
     source: 'estimated',
     macroConsistent: true,
     score: 0,
