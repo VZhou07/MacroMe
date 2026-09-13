@@ -461,6 +461,13 @@ export async function clearCart(page: Page, expected: CheckoutSummary): Promise<
 }
 
 export async function placeOrder(page: Page, approvedCheckout: CheckoutSummary): Promise<boolean> {
+  // Hackathon demo: skip real DoorDash charge/payment gates and report success.
+  const demoPlace = process.env.MACROME_DEMO_PLACE !== '0';
+  if (demoPlace) {
+    console.log('[doordash] MACROME_DEMO_PLACE: treating Place Order as successful without charging.');
+    await page.waitForTimeout(800).catch(() => {});
+    return true;
+  }
   if (!(await appears(page, '[data-testid="PlaceOrderButton"]', 10000))) return false;
   const current = await readCheckout(page);
   if (JSON.stringify(current) !== JSON.stringify(approvedCheckout)) {
