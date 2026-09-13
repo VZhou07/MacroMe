@@ -423,14 +423,15 @@ async function orderMeal(mealConfig: MealConfig, scheduledFor: Date, record: Par
         console.log(`[agent] Added to cart: ${candidate.item}`);
         break;
       }
-      if (addResult.reason === "add-unconfirmed" || addResult.reason === "session-ended") {
-        picked = candidate;
-        orderPage = tab;
-        console.log('[agent] Inspecting actual cart before deciding whether to retry or replace the dish.');
-        break;
-      }
+      // Never proceed to checkout on an unconfirmed add — that left stale carts
+      // stuck in recovery. Close the tab and try the next pick instead.
       await closePage(tab, `${candidate.restaurant} / cart`);
       assertConnected(activeBrowser);
+      if (addResult.reason === 'session-ended') {
+        console.log('[agent] Steel session ended during add; stopping further cart attempts.');
+        skipped.push({ item: candidate.item, reason: 'session ended' });
+        break;
+      }
       const reason = `couldn't be added (${addResult.reason})`;
       console.log(`[agent] Couldn't add ${candidate.item} — ${addResult.reason}; trying next pick`);
       skipped.push({ item: candidate.item, reason });

@@ -209,6 +209,50 @@ export async function fillRequiredOptions(page: Page): Promise<number> {
   });
 }
 
+/** True when the item modal still demands required choices the agent cannot finish. */
+async function unresolvedRequiredOptions(page: Page): Promise<boolean> {
+  const addBtn = page.locator('[data-testid^="AddToCartButton"]').first();
+  const label = ((await addBtn.innerText().catch(() => '')) || '').replace(/\s+/g, ' ').trim();
+  if (/required selection/i.test(label)) return true;
+  if (!(await addBtn.isEnabled().catch(() => false))) return true;
+  return page.evaluate(() => {
+    const visible = (el: Element) => {
+      const style = window.getComputedStyle(el);
+      const rect = el.getBoundingClientRect();
+      return style.display !== 'none' && style.visibility !== 'hidden' && rect.width > 0 && rect.height > 0;
+    };
+    for (const el of document.querySelectorAll('h1, h2, h3, h4, span, div, p, legend, label')) {
+      const text = (el.textContent ?? '').replace(/\s+/g, ' ').trim();
+      // Optional sections (e.g. Extra Protein) are fine to skip.
+      if (!/\brequired\b/i.test(text) || /\boptional\b/i.test(text) || text.length > 120) continue;
+      const section = el.closest('section, fieldset, [data-testid], li, div') ?? el.parentElement;
+      if (!section || !visible(section)) continue;
+      const selected = section.querySelector(
+        'input[type="radio"]:checked, [role="radio"][aria-checked="true"], input[type="checkbox"]:checked',
+      );
+      if (selected) continue;
+      const choices = section.querySelectorAll(
+        'input[type="radio"], [role="radio"], input[type="checkbox"], button, [role="button"]',
+      );
+      if (choices.length > 0) return true;
+    }
+    return false;
+  });
+}
+
+async function itemModalOpen(page: Page): Promise<boolean> {
+  return page.locator('[data-testid^="AddToCartButton"]').first().isVisible().catch(() => false);
+}
+
+async function confirmNewCartIfPrompted(page: Page): Promise<void> {
+  const newCartSelector = 'button:has-text("New Order"), button:has-text("Start New Cart"), button:has-text("New cart"), button:has-text("Replace cart")';
+  if (await appears(page, newCartSelector, 2500)) {
+    console.log('[doordash] confirming start-new-cart dialog');
+    await page.locator(newCartSelector).first().click({ timeout: 8000 }).catch(() => {});
+    await page.waitForTimeout(1000);
+  }
+}
+
 export async function addItemToCart(page: Page, storeUrl: string, itemId: string): Promise<AddToCartResult> {
   // Background tabs are throttled and DoorDash's virtualized menu never renders in them.
   await focus(page);
@@ -255,15 +299,22 @@ export async function addItemToCart(page: Page, storeUrl: string, itemId: string
     const enabled = await addBtn.isEnabled().catch(() => false);
     const label = ((await addBtn.innerText().catch(() => "")) || "").replace(/\s+/g, " ").trim();
     console.log(`[doordash] add button attempt ${attempt + 1}: enabled=${enabled} label="${label}"`);
-    if (enabled && !/required selection/i.test(label)) break;
+    if (enabled && !/required selection/i.test(label) && !(await unresolvedRequiredOptions(page))) break;
 
     const filled = await fillRequiredOptions(page);
     console.log(`[doordash] auto-selected ${filled} required option(s)`);
-    if (filled === 0 && !enabled) {
+    if (filled === 0 && (!enabled || /required selection/i.test(label))) {
       await page.keyboard.press("Escape").catch(() => {});
       return { ok: false, reason: "required-options-unfilled" };
     }
     await page.waitForTimeout(400);
+  }
+
+  if (await unresolvedRequiredOptions(page)) {
+    const label = ((await addBtn.innerText().catch(() => "")) || "").replace(/\s+/g, " ").trim();
+    console.log(`[doordash] skipping item — unresolved required options remain (button="${label}")`);
+    await page.keyboard.press("Escape").catch(() => {});
+    return { ok: false, reason: "required-options-unfilled" };
   }
 
   if (!(await addBtn.isEnabled().catch(() => false))) {
@@ -273,35 +324,44 @@ export async function addItemToCart(page: Page, storeUrl: string, itemId: string
     return { ok: false, reason: "required-options-unfilled" };
   }
 
-  await addBtn.click();
+  await addBtn.click({ timeout: 10000 });
   console.log("[doordash] clicked Add to cart");
+  await confirmNewCartIfPrompted(page);
 
-  // Adding from a different store than what's already in the cart asks to start a new cart.
-  const newCartSelector = 'button:has-text("New Order"), button:has-text("Start New Cart"), button:has-text("New cart")';
-  if (await appears(page, newCartSelector, 2000)) {
-    console.log("[doordash] confirming start-new-cart dialog");
-    await page.locator(newCartSelector).first().click();
+  // A successful add dismisses the modal. If it stays open, the click did not commit.
+  for (let attempt = 0; attempt < 8; attempt++) {
+    await confirmNewCartIfPrompted(page);
+    if (!(await itemModalOpen(page))) break;
+    await page.waitForTimeout(500);
+  }
+  if (await itemModalOpen(page)) {
+    console.log('[doordash] item modal still open after Add — treating as failed add');
+    await page.keyboard.press("Escape").catch(() => {});
+    return { ok: false, reason: "add-unconfirmed" };
   }
 
-  await page.waitForTimeout(2500);
+  await page.waitForTimeout(1500);
   if (await sessionEndedVisible(page)) return { ok: false, reason: "session-ended" };
 
   // The badge can update late, or reset when switching restaurants. Inspect
   // the cart itself as well before deciding whether the add succeeded.
-  for (let attempt = 0; attempt < 5; attempt++) {
+  const nameNeedle = itemName.toLowerCase();
+  for (let attempt = 0; attempt < 6; attempt++) {
     const after = await cartCount(page);
     console.log(`[doordash] cart count after: ${after}`);
     if (after > before) return { ok: true };
     if (!(await page.locator('[data-testid="CheckoutButton"]').first().isVisible().catch(() => false))) {
-      await page.locator('[data-testid="OrderCartIconButton"]').click().catch(() => {});
+      await page.locator('[data-testid="OrderCartIconButton"]').click({ timeout: 5000 }).catch(() => {});
+      await page.waitForTimeout(600);
     }
     const cart = await readCheckout(page, false).catch(() => null);
-    if (cart?.cartItems.some((line) => line.name.toLowerCase() === itemName.toLowerCase())) {
+    if (cart?.cartItems.some((line) => line.name.toLowerCase() === nameNeedle || (nameNeedle && line.name.toLowerCase().includes(nameNeedle)))) {
       console.log(`[doordash] confirmed ${itemName} in the cart`);
       return { ok: true };
     }
-    await page.waitForTimeout(1000);
+    await page.waitForTimeout(800);
   }
+  console.log(`[doordash] add did not land in cart for ${itemName || itemId}; will try another pick`);
   return { ok: false, reason: "add-unconfirmed" };
 }
 
