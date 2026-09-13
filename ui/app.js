@@ -158,14 +158,6 @@ function renderMacros() {
   const parts = { protein: num(m.protein) * 4, carbs: num(m.carbs) * 4, fat: num(m.fat) * 9 };
   const bar = $('#splitBar');
   Object.entries(parts).forEach(([k, v]) => { $(`.${k}`, bar).style.width = cal ? `${(v / cal) * 100}%` : '0'; });
-  $('#splitLegend').innerHTML = Object.entries(parts)
-    .map(([k, v]) => `<span><i class="dot ${k}"></i> ${k[0].toUpperCase() + k.slice(1)} ${cal ? Math.round((v / cal) * 100) : 0}%</span>`)
-    .join('');
-}
-
-function mealHint(meal) {
-  const pm = perMealMacros();
-  return `~${pm.calories} cal · ${pm.protein}g P · ${pm.carbs}g C · ${pm.fat}g F${meal.time ? ` · order placed ${fmtTime(minusMinutes(meal.time, state.orderLeadMinutes))}` : ''}`;
 }
 
 function renderMeals() {
@@ -180,10 +172,11 @@ function renderMeals() {
       <span class="meal-idx">${pos + 1}</span>
       <input type="text" data-meal="${i}" data-key="name" value="${esc(meal.name)}" aria-label="Meal ${pos + 1} name" maxlength="30">
       <input type="time" data-meal="${i}" data-key="time" value="${esc(meal.time)}" aria-label="Meal ${pos + 1} time">
-      <span class="meal-macros">${mealHint(meal)}</span>
     </div>`).join('');
-  field('lead').value = String(state.orderLeadMinutes);
 }
+
+const TIP_STEP = 1;
+const TIP_MAX = 30;
 
 function renderBudget() {
   const b = state.budget;
@@ -194,7 +187,9 @@ function renderBudget() {
   range.value = Math.min(num(b.amount), max);
   $$('#budgetPeriod button').forEach((btn) => btn.setAttribute('aria-pressed', String(btn.dataset.period === b.period)));
   field('includesFees').checked = b.includesFeesAndTip;
-  field('tip').value = String(b.tipPercent);
+  $('#tipOutput').textContent = `${b.tipPercent}%`;
+  $('#tipMinus').disabled = b.tipPercent <= 0;
+  $('#tipPlus').disabled = b.tipPercent >= TIP_MAX;
 
   const perOrder = perOrderBudget();
   const food = foodBudget();
@@ -217,9 +212,6 @@ function renderDays() {
   const set = [...state.days].sort().join();
   const presets = { weekdays: 'fri,mon,thu,tue,wed', weekends: 'sat,sun', all: 'fri,mon,sat,sun,thu,tue,wed' };
   $$('[data-days]').forEach((b) => b.setAttribute('aria-pressed', String(presets[b.dataset.days] === set)));
-  $('#dayStats').innerHTML = `
-    <div class="stat"><b>${state.days.length}</b>${state.days.length === 1 ? 'day' : 'days'} a week</div>
-    <div class="stat"><b>${ordersPerWeek()}</b>orders a week</div>`;
 }
 
 function renderAddresses() {
@@ -266,7 +258,6 @@ function renderAssignments() {
 
   const options = (selected) => state.addresses
     .map((a) => `<option value="${a.id}" ${a.id === selected ? 'selected' : ''}>${esc(a.label || 'Unnamed')}</option>`).join('');
-  $('#setAll').innerHTML = `<option value="">Choose…</option>${options(null)}`;
 
   const meals = mealsByTime();
   $('#assignTable').innerHTML = `
@@ -277,10 +268,6 @@ function renderAssignments() {
         return `<td><select class="addr-select" data-assign="${day}|${m.id}" style="--addr:${addressColor(id)}" aria-label="${long} ${esc(m.name)} address">${options(id)}</select></td>`;
       }).join('')}</tr>`).join('')}
     </tbody>`;
-
-  const counts = ordersPerAddress();
-  $('#addrStats').innerHTML = state.addresses
-    .map((a) => `<div class="stat"><b>${counts[a.id]}</b>${esc(a.label || 'Unnamed')} orders / week</div>`).join('');
 }
 
 // What the agent types into DoorDash's store search. Kept in sync with the
@@ -326,9 +313,9 @@ function renderReview() {
     <span><b>${esc(a.label)}</b> · ${esc(`${a.street}${a.apt ? `, ${a.apt}` : ''}, ${a.city}, ${a.state} ${a.zip}`)} · ${a.dropoff === 'door' ? 'Leave at door' : 'Hand to me'} · ${plural(counts[a.id], 'order')}/week</span></li>`).join('');
   const items = [
     ['macros', 'Daily macros', `${calories(m).toLocaleString()} cal`, `${m.protein}g protein · ${m.carbs}g carbs · ${m.fat}g fat`],
-    ['meals', 'Meals', `${state.meals.length} a day`, mealsByTime().map((x) => `${esc(x.name)} ${fmtTime(x.time)}`).join(' · ')],
-    ['budget', 'Budget', `${money(num(state.budget.amount))} per ${state.budget.period}`, `≈ ${money(perOrderBudget())} per order · ${money(foodBudget())} for food · ${state.budget.tipPercent}% tip${state.budget.includesFeesAndTip ? ' · fees included' : ''}`],
-    ['days', 'Days', `${ordersPerWeek()} orders a week`, dayNames],
+    ['meals', 'Meals', `${state.meals.length}/day`, mealsByTime().map((x) => `${esc(x.name)} ${fmtTime(x.time)}`).join(' · ')],
+    ['budget', 'Budget', `${money(num(state.budget.amount))}/${state.budget.period}`, `≈ ${money(perOrderBudget())} per order · ${money(foodBudget())} for food · ${state.budget.tipPercent}% tip${state.budget.includesFeesAndTip ? ' · fees included' : ''}`],
+    ['days', 'Days', `${ordersPerWeek()} meals/week`, dayNames],
     ['location', 'Deliver to', plural(state.addresses.length, 'address'), `<ul class="addr-lines">${addrLines}</ul>`, 'wide'],
     ['prefs', 'Food', esc(effectiveSearchQuery()), esc(prefsSummary())],
   ];
@@ -580,15 +567,21 @@ function setMealCount(n) {
 $('#mealsMinus').addEventListener('click', () => setMealCount(state.meals.length - 1));
 $('#mealsPlus').addEventListener('click', () => setMealCount(state.meals.length + 1));
 
+function setTip(pct) {
+  state.budget.tipPercent = Math.min(TIP_MAX, Math.max(0, pct));
+  renderBudget();
+  saveDraft();
+}
+$('#tipMinus').addEventListener('click', () => setTip(state.budget.tipPercent - TIP_STEP));
+$('#tipPlus').addEventListener('click', () => setTip(state.budget.tipPercent + TIP_STEP));
+
 form.addEventListener('input', (e) => {
   const t = e.target;
   t.classList.remove('invalid');
   showError(null);
   if (['protein', 'carbs', 'fat'].includes(t.name)) { state.macros[t.name] = t.value === '' ? '' : +t.value; renderMacros(); }
   else if (t.dataset.meal !== undefined) {
-    const meal = state.meals[+t.dataset.meal];
-    meal[t.dataset.key] = t.value;
-    if (t.dataset.key === 'time') t.parentElement.querySelector('.meal-macros').textContent = mealHint(meal);
+    state.meals[+t.dataset.meal][t.dataset.key] = t.value;
   }
   else if (t.dataset.addr !== undefined) {
     state.addresses[+t.dataset.addr][t.dataset.key] = t.value;
@@ -597,15 +590,6 @@ form.addEventListener('input', (e) => {
   else if (t.dataset.assign) {
     state.assignments[t.dataset.assign] = t.value;
     t.style.setProperty('--addr', addressColor(t.value));
-    const counts = ordersPerAddress();
-    $('#addrStats').innerHTML = state.addresses
-      .map((a) => `<div class="stat"><b>${counts[a.id]}</b>${esc(a.label || 'Unnamed')} orders / week</div>`).join('');
-  }
-  else if (t.id === 'setAll') {
-    if (t.value) {
-      selectedDays().forEach(([day]) => state.meals.forEach((m) => { state.assignments[`${day}|${m.id}`] = t.value; }));
-      renderAssignments();
-    }
   }
   else if (t.name === 'avoid') state.prefs.avoid = t.value;
   else if (t.name === 'searchQuery') {
@@ -613,11 +597,9 @@ form.addEventListener('input', (e) => {
     state.prefs.searchQuery = t.value;
     state.prefs.searchQueryEdited = true;
   }
-  else if (t.name === 'lead') { state.orderLeadMinutes = +t.value; renderMeals(); }
   else if (t.name === 'budget') { state.budget.amount = t.value === '' ? '' : +t.value; renderBudget(); }
   else if (t.id === 'budgetRange') { state.budget.amount = +t.value; renderBudget(); }
-  else if (t.name === 'includesFees') state.budget.includesFeesAndTip = t.checked;
-  else if (t.name === 'tip') state.budget.tipPercent = +t.value;
+  else if (t.name === 'includesFees') { state.budget.includesFeesAndTip = t.checked; renderBudget(); }
   saveDraft();
 });
 
