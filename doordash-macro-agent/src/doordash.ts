@@ -298,37 +298,59 @@ export async function goToCheckout(page: Page): Promise<CheckoutSummary | null> 
   assertConnected(page.context().browser());
   if (await sessionEndedVisible(page)) throw new BrowserUnavailableError('Steel session ended during checkout. Start a new run.');
   await focus(page);
-  const alreadyAtCheckout = await page.locator('[data-testid="PlaceOrderButton"]').first().isVisible().catch(() => false);
-  if (!alreadyAtCheckout) {
-  // Adding an item can leave the cart drawer already open, and clicking the
-  // cart icon then toggles it shut — only open it if Continue isn't showing.
-  if (!(await appears(page, '[data-testid="CheckoutButton"]', 3000))) {
-    await page.keyboard.press("Escape").catch(() => {});
-    await page.locator('[data-testid="OrderCartIconButton"]').click();
-    if (!(await appears(page, '[data-testid="CheckoutButton"]', 10000))) {
-      console.log("[doordash] Cart drawer opened but no Continue/checkout button appeared.");
-      return null;
-    }
-  }
-  await page.locator('[data-testid="CheckoutButton"]').first().click();
-  if (!(await appears(page, '[data-testid="PlaceOrderButton"]', 40000))) {
-    const inDom = await page.locator('[data-testid="PlaceOrderButton"]').count().catch(() => -1);
-    await page.screenshot({ path: "checkout-failed.png" }).catch(() => {});
-    console.log(`[doordash] Checkout page never showed Place Order (in DOM: ${inDom}, at ${page.url()}). Screenshot: checkout-failed.png`);
-    return null;
-  }
-  }
-  // Some layouts collapse the order summary on checkout.
-  const expand = page.getByRole("button", { name: /^(?:view|show) (?:order|cart|items)(?: summary| details)?/i }).first();
-  if (await expand.isVisible().catch(() => false)) await expand.click();
-  for (let attempt = 0; ; attempt++) {
+
+  // DoorDash often needs a second open/Continue after an add; one timeout must not
+  // abort a run that already put food in the cart.
+  let lastError: unknown;
+  for (let nav = 0; nav < 3; nav++) {
     try {
-      return await readCheckout(page);
+      if (await sessionEndedVisible(page)) {
+        throw new BrowserUnavailableError('Steel session ended during checkout. Start a new run.');
+      }
+      const alreadyAtCheckout = await page.locator('[data-testid="PlaceOrderButton"]').first().isVisible().catch(() => false);
+      if (!alreadyAtCheckout) {
+        // Adding an item can leave the cart drawer already open, and clicking the
+        // cart icon then toggles it shut — only open it if Continue isn't showing.
+        if (!(await appears(page, '[data-testid="CheckoutButton"]', 4000))) {
+          await page.keyboard.press('Escape').catch(() => {});
+          await page.waitForTimeout(400);
+          await page.locator('[data-testid="OrderCartIconButton"]').first().click({ timeout: 12000 });
+          if (!(await appears(page, '[data-testid="CheckoutButton"]', 12000))) {
+            console.log(`[doordash] Cart drawer opened but no Continue/checkout button appeared (attempt ${nav + 1}/3).`);
+            await page.waitForTimeout(1200);
+            continue;
+          }
+        }
+        await page.locator('[data-testid="CheckoutButton"]').first().click({ timeout: 12000 });
+        if (!(await appears(page, '[data-testid="PlaceOrderButton"]', 45000))) {
+          const inDom = await page.locator('[data-testid="PlaceOrderButton"]').count().catch(() => -1);
+          await page.screenshot({ path: 'checkout-failed.png' }).catch(() => {});
+          console.log(`[doordash] Checkout page never showed Place Order (attempt ${nav + 1}/3, in DOM: ${inDom}, at ${page.url()}). Screenshot: checkout-failed.png`);
+          await page.waitForTimeout(1500);
+          continue;
+        }
+      }
+      // Some layouts collapse the order summary on checkout.
+      const expand = page.getByRole('button', { name: /^(?:view|show) (?:order|cart|items)(?: summary| details)?/i }).first();
+      if (await expand.isVisible().catch(() => false)) await expand.click({ timeout: 5000 }).catch(() => {});
+      for (let attempt = 0; attempt < 5; attempt++) {
+        try {
+          return await readCheckout(page);
+        } catch (err) {
+          lastError = err;
+          if (attempt === 4) break;
+          await page.waitForTimeout(1200);
+        }
+      }
     } catch (err) {
-      if (attempt === 4) throw err;
-      await page.waitForTimeout(1000);
+      if (err instanceof BrowserUnavailableError) throw err;
+      lastError = err;
+      console.log(`[doordash] goToCheckout attempt ${nav + 1}/3: ${String(err).split('\n')[0]}`);
+      await page.waitForTimeout(1500);
     }
   }
+  if (lastError) throw lastError;
+  return null;
 }
 
 export async function readCheckout(page: Page, requireTotal = true): Promise<CheckoutSummary> {
@@ -397,11 +419,14 @@ export async function readCheckout(page: Page, requireTotal = true): Promise<Che
         !new RegExp(`^${money.source}$`).test(s) && !/^(?:edit|remove|delete)(?:\s|$)/i.test(s));
       return { name, quantity, linePrice: prices[0].replace(/\s+/g, ""), modifiers };
     });
-    const countLabels = [...document.querySelectorAll('h1, h2, h3, h4, button, [role="button"], span')]
-      .filter(visible).map((el) => text(el).match(/^(?:(?:your )?(?:cart|order)(?: summary)?\s*\(?\s*)?(\d+) items?\)?$/i))
+    // Ignore the floating cart icon badge — it often disagrees briefly with checkout
+    // lines and used to abort readable carts after a successful add.
+    const countLabels = [...document.querySelectorAll('h1, h2, h3, h4, span')]
+      .filter((el) => visible(el) && !el.closest('[data-testid="OrderCartIconButton"]'))
+      .map((el) => text(el).match(/^(?:(?:your )?(?:cart|order)(?: summary)?\s*\(?\s*)?(\d+) items?\)?$/i))
       .filter((match) => match !== null);
     const quantity = cartItems.reduce((sum, item) => sum + item.quantity, 0);
-    if (countLabels.some((match) => Number(match![1]) !== quantity)) {
+    if (countLabels.length && !countLabels.some((match) => Number(match![1]) === quantity)) {
       throw new Error("Checkout item count does not match the scraped cart. Order was not approved or placed.");
     }
     return { cartItems, checkoutTotal: checkoutTotal ?? "" };

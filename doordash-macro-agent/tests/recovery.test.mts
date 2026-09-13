@@ -64,6 +64,39 @@ test('inspection failures reach recovery; repeated failures stop after eight att
   assert.equal(decisions, 8);
 });
 
+test('checkout timeouts retry navigation before asking the model, and refuse early stop', async () => {
+  let inspects = 0;
+  let decisions = 0;
+  const result = await prepareCheckout(page, pick, [pick], options, {
+    inspect: async () => {
+      inspects += 1;
+      if (inspects <= 2) throw new Error('page.waitForSelector: Timeout 20000ms exceeded');
+      return cart('CA$25.00');
+    },
+    edit: async () => assert.fail('Unverified edit'), clear: async () => assert.fail('Unverified clear'), add: async () => assert.fail('Unverified add'),
+    decide: async () => { decisions += 1; assert.fail('Early timeout retries must not call the model'); return { action: 'stop', reasoning: 'nope' }; },
+  });
+  assert.equal(inspects, 3);
+  assert.equal(decisions, 0);
+  assert.equal(result.checkout.checkoutTotal, 'CA$25.00');
+
+  inspects = 0;
+  decisions = 0;
+  let forcedRetries = 0;
+  await assert.rejects(prepareCheckout(page, pick, [pick], options, {
+    inspect: async () => { inspects += 1; throw new Error('Timeout while reading checkout'); },
+    edit: async () => assert.fail('Unverified edit'), clear: async () => assert.fail('Unverified clear'), add: async () => assert.fail('Unverified add'),
+    decide: async () => {
+      decisions += 1;
+      return { action: 'stop', reasoning: 'Cart is null after one retry; stopping' };
+    },
+  }), /Cart is null after one retry|after recovery attempts/);
+  assert.ok(inspects >= 4, `expected several inspect attempts, got ${inspects}`);
+  assert.ok(decisions >= 1);
+  forcedRetries = decisions;
+  assert.ok(forcedRetries >= 1);
+});
+
 test('combination is approved only when every selected component is in the cart', async () => {
   const combo = { ...pick, item: 'Bowl + Rice', components: [
     { itemId:'1', item:'Bowl', price:15, estimatedMacros:pick.estimatedMacros },

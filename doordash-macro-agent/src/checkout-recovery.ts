@@ -6,18 +6,32 @@ import { addMealToCart, cartContainsMeal } from './meal-components.js';
 import { BrowserUnavailableError } from './browser-work.js';
 import { emit } from './events.js';
 
+const INSPECT_FAIL = /timeout|time budget|navigation did not finish|could not read|not readable|null/i;
+
+/** Soft settle after a failed checkout read — avoid reloading on the first tries. */
+async function settleAfterInspectFailure(page: Page, reload: boolean): Promise<void> {
+  await page.keyboard?.press?.('Escape')?.catch?.(() => {});
+  await page.waitForTimeout(800);
+  if (reload) {
+    await page.reload({ waitUntil: 'domcontentloaded', timeout: 20000 }).catch(() => {});
+    await page.waitForTimeout(1500);
+  }
+}
+
 export async function prepareCheckout(page: Page, initialPick: PickedMeal, candidates: PickedMeal[], options: {
   budget: number; includesFees: boolean; brief: string;
 }, dependencies = { inspect: goToCheckout, edit: editCartLine, clear: clearCart, add: addItemToCart, decide: decideRecovery }) {
   let picked = initialPick;
   const history: string[] = [];
   const deadline = Date.now() + 4 * 60000;
+  let consecutiveInspectFailures = 0;
   for (let attempt = 0; attempt < 8 && Date.now() < deadline; attempt++) {
     let cart: CheckoutSummary | null = null;
     let problem = '';
     try {
       cart = await dependencies.inspect(page);
       if (!cart) throw new Error('Checkout navigation did not finish');
+      consecutiveInspectFailures = 0;
       const cost = cartCost(cart, options.includesFees);
       const containsPick = cartContainsMeal(cart, picked);
       if (cost <= options.budget && containsPick) return { checkout: cart, picked };
@@ -26,32 +40,51 @@ export async function prepareCheckout(page: Page, initialPick: PickedMeal, candi
     } catch (error) {
       if (error instanceof BrowserUnavailableError) throw error;
       problem = String(error).split('\n')[0];
+      consecutiveInspectFailures += 1;
     }
+
+    // After a successful add, DoorDash often needs a couple of Continue clicks
+    // before Place Order is readable. Don't ask the model to stop yet.
+    if (!cart && consecutiveInspectFailures <= 3 && INSPECT_FAIL.test(problem)) {
+      const message = `Recovery ${attempt + 1}/8: Checkout not readable yet (${problem}); retrying navigation.`;
+      console.log(`[agent] ${message}`);
+      emit({ type: 'status', message });
+      history.push(`deterministic-inspect-retry: ${problem}`);
+      await settleAfterInspectFailure(page, consecutiveInspectFailures >= 3);
+      continue;
+    }
+
     const action = await dependencies.decide({ ...options, cart, candidates, problem, history });
-    const message = `Recovery ${attempt + 1}/8: ${action.reasoning}`;
+    let resolved = action;
+    if (action.action === 'stop' && !cart && consecutiveInspectFailures < 6) {
+      resolved = {
+        action: 'retry',
+        reasoning: `Checkout still unreadable (${problem}); forcing another navigation retry instead of stopping early.`,
+      };
+    }
+    const message = `Recovery ${attempt + 1}/8: ${resolved.reasoning}`;
     console.log(`[agent] ${message}`);
     emit({ type: 'status', message });
-    if (action.action === 'stop') throw new Error(action.reasoning);
+    if (resolved.action === 'stop') throw new Error(resolved.reasoning);
     try {
-      if (action.action === 'remove' || action.action === 'decrease') {
+      if (resolved.action === 'remove' || resolved.action === 'decrease') {
         if (!cart) throw new Error('Cart must be readable before editing');
-        await dependencies.edit(page, cart, action.line, action.action);
-      } else if (action.action === 'replace') {
-        if (!cart || !candidates[action.candidate]) throw new Error('Invalid replacement');
-        const replacement = candidates[action.candidate];
+        await dependencies.edit(page, cart, resolved.line, resolved.action);
+      } else if (resolved.action === 'replace') {
+        if (!cart || !candidates[resolved.candidate]) throw new Error('Invalid replacement');
+        const replacement = candidates[resolved.candidate];
         await dependencies.clear(page, cart);
         const result = await addMealToCart(page, replacement, dependencies.add);
         // An ambiguous add is inspected on the next iteration, never blindly repeated.
         picked = replacement;
         if (!result.ok) throw new Error(`Replacement add: ${result.reason}`);
       } else {
-        await page.reload({ waitUntil: 'domcontentloaded', timeout: 20000 });
-        await page.waitForTimeout(1000);
+        await settleAfterInspectFailure(page, history.filter((line) => /retry|inspect/i.test(line)).length >= 2);
       }
-      history.push(`${JSON.stringify(action)}: executed; inspect fresh cart next`);
+      history.push(`${JSON.stringify(resolved)}: executed; inspect fresh cart next`);
     } catch (error) {
       if (error instanceof BrowserUnavailableError) throw error;
-      history.push(`${JSON.stringify(action)} failed: ${String(error).split('\n')[0]}`);
+      history.push(`${JSON.stringify(resolved)} failed: ${String(error).split('\n')[0]}`);
     }
   }
   throw new Error(`Could not prepare a verified cart within budget after recovery attempts. No order placed. ${history.at(-1) ?? ''}`);
