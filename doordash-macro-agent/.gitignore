@@ -4,5 +4,5 @@ dist/
 recordings/
 cache/
 reports/
-data/
+data/nutrition.db
 *.log
