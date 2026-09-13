@@ -6,12 +6,20 @@
 
 const DAYS = ['sun', 'mon', 'tue', 'wed', 'thu', 'fri', 'sat'];
 
+const formatters = new Map();
+
 /** The wall-clock fields of an instant, as seen in `timezone`. */
 function dateParts(date, timezone) {
-  return Object.fromEntries(new Intl.DateTimeFormat('en-CA', {
+  let formatter = formatters.get(timezone);
+  if (!formatter) {
+    formatter = new Intl.DateTimeFormat('en-CA', {
     timeZone: timezone, year: 'numeric', month: '2-digit', day: '2-digit',
     hour: '2-digit', minute: '2-digit', second: '2-digit', hourCycle: 'h23',
-  }).formatToParts(date).filter((part) => part.type !== 'literal').map((part) => [part.type, Number(part.value)]));
+    });
+    if (formatters.size >= 32) formatters.clear();
+    formatters.set(timezone, formatter);
+  }
+  return Object.fromEntries(formatter.formatToParts(date).filter((part) => part.type !== 'literal').map((part) => [part.type, Number(part.value)]));
 }
 
 function wallTime(parts) {

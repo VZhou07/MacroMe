@@ -6,7 +6,7 @@
 // server all report the same numbers.
 const fs = require('fs');
 const path = require('path');
-const { localDate, instantAt, shiftDateKey } = require('./tz.cjs');
+const { localDate, instantAt, shiftDateKey, DAYS, dateKeyToUtc } = require('./tz.cjs');
 const dayLog = require('./day-log.cjs');
 
 const DIGEST_PATH = process.env.MACROME_DIGESTS || path.join(__dirname, 'macrome-digests.json');
@@ -61,18 +61,33 @@ function parseMoney(total) {
 }
 
 /** When the day's digest becomes due, as `HH:MM` in the plan timezone. */
-function digestTime(plan) {
-  const override = String(process.env.MACROME_DIGEST_TIME || plan.digestTime || '').trim();
-  if (/^\d{2}:\d{2}$/.test(override)) return override;
-  const times = (plan.meals || []).map((meal) => meal.time).filter((time) => /^\d{2}:\d{2}$/.test(time)).sort();
-  const last = times[times.length - 1] || '21:00';
-  const [hour, minute] = last.split(':').map(Number);
-  const total = Math.min(hour * 60 + minute + BUFFER_MINUTES, 23 * 60 + 59);
+function digestOverride(plan) {
+  const value = String(process.env.MACROME_DIGEST_TIME || plan.digestTime || '').trim();
+  return /^(?:[01]\d|2[0-3]):[0-5]\d$/.test(value) ? value : null;
+}
+
+function lastMealTime(plan, date) {
+  const day = date ? DAYS[dateKeyToUtc(date).getUTCDay()] : null;
+  const scheduled = (plan.schedule || []).filter((entry) => !day || entry.day === day);
+  const times = (scheduled.length ? scheduled : plan.meals || [])
+    .map((meal) => meal.time).filter((time) => /^(?:[01]\d|2[0-3]):[0-5]\d$/.test(time)).sort();
+  return times.at(-1) || '21:00';
+}
+
+function digestTime(plan, date) {
+  const override = digestOverride(plan);
+  if (override) return override;
+  const [hour, minute] = lastMealTime(plan, date).split(':').map(Number);
+  const total = (hour * 60 + minute + BUFFER_MINUTES) % 1440;
   return `${String(Math.floor(total / 60)).padStart(2, '0')}:${String(total % 60).padStart(2, '0')}`;
 }
 
 function digestDueAt(plan, date) {
-  return instantAt(date, digestTime(plan), plan.timezone || 'UTC');
+  const timezone = plan.timezone || 'UTC';
+  const override = digestOverride(plan);
+  if (override) return instantAt(date, override, timezone);
+  const last = instantAt(date, lastMealTime(plan, date), timezone);
+  return last ? new Date(last.getTime() + BUFFER_MINUTES * 60000) : null;
 }
 
 function sumMacros(entries) {
@@ -152,6 +167,8 @@ function buildDigest(plan, date, entries, now = new Date()) {
 
 /** Build (or rebuild) one date's digest from the day log and save it. */
 function generateDigest(plan, date, options = {}) {
+  const saved = getDigest(date, options.file);
+  if (saved) return saved;
   const entries = dayLog.entriesForDate(date, options.dayLogFile);
   return writeDigest(buildDigest(plan, date, entries, options.now || new Date()), options.file);
 }

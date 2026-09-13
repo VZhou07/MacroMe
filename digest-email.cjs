@@ -3,6 +3,10 @@
 // Off unless both RESEND_API_KEY and DIGEST_EMAIL are set, and it never throws
 // — the digest is already saved to disk and shown on the dashboard by the time
 // this runs, so a mail outage must not look like a failed day.
+const fs = require('fs');
+const { createHash } = require('crypto');
+const { DIGEST_PATH } = require('./digest.cjs');
+
 const RESEND_ENDPOINT = 'https://api.resend.com/emails';
 const TIMEOUT_MS = 10000;
 
@@ -54,10 +58,22 @@ async function sendDigest(digest, options = {}) {
   const to = options.to || process.env.DIGEST_EMAIL;
   const key = options.apiKey || process.env.RESEND_API_KEY;
   if (!to || !key) return { sent: false, reason: 'DIGEST_EMAIL and RESEND_API_KEY are not both set' };
+  // Reserve before sending: concurrent callers and restarts must not mail twice.
+  const recipients = to.split(',').map((address) => address.trim()).filter(Boolean).sort();
+  const token = createHash('sha256').update(JSON.stringify([digest.date, recipients])).digest('hex');
+  const receipt = `${options.file || DIGEST_PATH}.${token}.email.json`;
+  let reserved = false;
   try {
+    try {
+      fs.writeFileSync(receipt, JSON.stringify({ date: digest.date, status: 'sending' }), { flag: 'wx' });
+      reserved = true;
+    } catch (err) {
+      if (err.code === 'EEXIST') return { sent: false, reason: 'This digest was already emailed or a previous send is still unconfirmed.' };
+      throw err;
+    }
     const response = await fetch(options.endpoint || RESEND_ENDPOINT, {
       method: 'POST',
-      headers: { Authorization: `Bearer ${key}`, 'Content-Type': 'application/json' },
+      headers: { Authorization: `Bearer ${key}`, 'Content-Type': 'application/json', 'Idempotency-Key': token },
       body: JSON.stringify({
         from: process.env.MACROME_EMAIL_FROM || 'MacroMe <onboarding@resend.dev>',
         to: to.split(',').map((address) => address.trim()).filter(Boolean),
@@ -68,10 +84,15 @@ async function sendDigest(digest, options = {}) {
       signal: AbortSignal.timeout(options.timeoutMs || TIMEOUT_MS),
     });
     const body = await response.json().catch(() => ({}));
-    if (!response.ok) return { sent: false, reason: body.message || `Resend replied ${response.status}` };
+    if (!response.ok) {
+      fs.unlinkSync(receipt);
+      reserved = false;
+      return { sent: false, reason: body.message || `Resend replied ${response.status}` };
+    }
+    fs.writeFileSync(receipt, JSON.stringify({ date: digest.date, status: 'sent', id: body.id || null }));
     return { sent: true, id: body.id || null };
   } catch (err) {
-    return { sent: false, reason: err instanceof Error ? err.message : String(err) };
+    return { sent: false, reason: `${err instanceof Error ? err.message : String(err)}${reserved ? ' Delivery is unconfirmed; automatic resend is suppressed to avoid duplicates.' : ''}` };
   }
 }
 

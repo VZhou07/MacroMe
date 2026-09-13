@@ -38,7 +38,7 @@ test('honors timezone, DST and lead times crossing midnight', () => {
   assert.deepEqual(queue.upcomingOrders({ ...plan, schedule: [] }, new Set()), []);
 });
 
-test('Run now uses the queue; failures stay queued; success persists across server restarts', async () => {
+test('Run now uses the queue; attempts stay consumed; success persists across server restarts', async () => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'macrome-queue-test-'));
   const configFile = path.join(dir, 'plan.json');
   const stateFile = path.join(dir, 'queue.json');
@@ -65,7 +65,8 @@ test('Run now uses the queue; failures stay queued; success persists across serv
           child.stdin = { write() {} }; return child;
         } };
         if (name === './order-queue.cjs') return {
-          upcomingOrders: (p) => queue.upcomingOrders(p, queue.readCompleted(stateFile)),
+          upcomingOrders: (p) => queue.upcomingOrders(p, queue.readExcluded(stateFile)),
+          markAttempted: (id) => queue.markAttempted(id, stateFile),
           markCompleted: (id) => queue.markCompleted(id, stateFile),
         };
         // The state modules take their file per call; bind them to this test's
@@ -93,6 +94,8 @@ test('Run now uses the queue; failures stay queued; success persists across serv
         return result;
       },
       finish(placed) { sandbox.api.handleEvent({ type: 'result', placed, message: 'test' }); child.emit('close', 0); },
+      event(value) { sandbox.api.handleEvent(value); },
+      exit(code) { child.emit('close', code); },
       get args() { return args; },
     };
   }
@@ -106,7 +109,7 @@ test('Run now uses the queue; failures stay queued; success persists across serv
     assert.equal(app.args[app.args.indexOf('--occurrence') + 1], original.id, 'the agent is told which occurrence it is running');
     assert.equal((await app.request('POST /api/run')).status, 409);
     app.finish(false);
-    assert.equal((await app.request('GET /api/run')).body.upcoming[0].id, original.id);
+    assert.notEqual((await app.request('GET /api/run')).body.upcoming[0].id, original.id);
     await app.request('POST /api/run');
     app.finish(true);
     assert.notEqual((await app.request('GET /api/run')).body.upcoming[0].id, original.id);
@@ -138,6 +141,17 @@ test('Run now uses the queue; failures stay queued; success persists across serv
     assert.equal(written.today.spend.amount, 19.1);
     assert.ok(!written.history.some((entry) => entry.date === today), 'today is never also in the history');
     assert.ok((await app2.request('GET /api/run')).body.notifications.some((note) => note.kind === 'digest'));
+
+    await app2.request('POST /api/run');
+    app2.event({ type: 'approval-request', cartItems: [{ name: 'Bowl' }], checkoutTotal: '$19.10' });
+    const decisions = await Promise.all([
+      app2.request('POST /api/run/approve', { approve: true }),
+      app2.request('POST /api/run/approve', { approve: true }),
+    ]);
+    assert.deepEqual(decisions.map((response) => response.status).sort(), [200, 409]);
+    app2.exit(1);
+    assert.equal((await app2.request('GET /api/run')).body.status, 'error', 'an exit while placing cannot leave a permanent spinner');
+
   } finally {
     fs.rmSync(dir, { recursive: true });
   }

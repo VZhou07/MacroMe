@@ -89,7 +89,7 @@ This is our lightweight database until we scale.
 
 ### What happens to a meal you were offline for
 
-Every tick records `lastSeenAt`. On the next boot, any occurrence whose order time fell between that timestamp and now, and that was never completed or attempted, is marked **missed** and written to the day log with the reason.
+On the first boot, elapsed slots from today in the plan timezone are recorded as missed. Every tick records `lastSeenAt`. On the next boot, any occurrence whose order time fell between that timestamp and now, and that was never completed or attempted, is marked **missed** and written to the day log with the reason.
 
 Missed means *recorded*, not retried: MacroMe will not quietly order lunch at 4pm because your laptop was shut at 11:45. Missed slots drop out of “Next scheduled orders”, show up in today's card and in that day's digest, and raise a notification when they are noticed. The look-back is capped at 14 days, so a machine that was off for a month doesn't wake up and declare a hundred missed meals.
 
@@ -128,7 +128,7 @@ npm run dev     # http://localhost:3000
 - **No plan saved yet** → `/` serves the onboarding wizard.
 - **A plan exists** → `/` serves the dashboard: your plan, the next scheduled orders, a **Run now** button, and the agent's live browser in an iframe. `/setup` always reopens the wizard to edit the plan.
 
-**Run now** takes the next dated order from **Next scheduled orders**. Once the agent reports it placed, that occurrence is removed; future repetitions stay scheduled. Completion history is saved in the gitignored `macrome-queue-state.json`, survives server restarts, and is also checked by the scheduler. Declining, failing, or running in dry-run mode does not mark it complete.
+**Run now** takes the next dated order from **Next scheduled orders**. Once the agent reports it placed, that occurrence is removed; future repetitions stay scheduled. Completion history is saved in the gitignored `macrome-queue-state.json`, survives server restarts, and is also checked by the scheduler. Each started occurrence is saved as attempted before the agent launches. Declining, failing, or running in dry-run mode does not mark it complete, but does consume that occurrence so a restart cannot automatically retry it.
 
 Scheduled meals fire from this same process, at each meal's order time, and land in the dashboard the same way — including the approval step. Nothing is charged without someone pressing **Place order**.
 
@@ -136,10 +136,10 @@ Scheduled meals fire from this same process, at each meal's order time, and land
 
 **Today** on the dashboard shows the day so far: one meter per macro against your daily target, and every meal that was ordered, declined, failed or missed, with the agent pick, the restaurant and the exact checkout total. Macro totals cover the agent pick in each placed order, not every line in the cart.
 
-The digest is written once per day, at the last meal's time plus 90 minutes (so 8:00 PM for a 6:30 PM dinner), and saved to `macrome-digests.json` keyed by date. Once written the card is marked **Final** and the day drops into **Earlier days**, which survives restarts. If the machine was asleep at that time, the digest is written on the next boot instead — including for days further back.
+The digest is written once per day, at the last meal's time in that date's schedule plus 90 minutes (even if the buffer crosses midnight) (so 8:00 PM for a 6:30 PM dinner), and saved to `macrome-digests.json` keyed by date. Once written the card is marked **Final** and the day drops into **Earlier days**, which survives restarts. If the machine was asleep at that time, the digest is written on the next boot instead — including for days further back.
 
 - `MACROME_DIGEST_TIME=21:30` (or `"digestTime": "21:30"` in the plan) overrides when it runs.
-- **Summarise today** writes the digest immediately, which is also how to demo it without waiting.
+- **Summarise today** finalizes the digest immediately; repeated requests return the saved copy without changing it, which is also how to demo it without waiting.
 - `npm run seed-demo -- --digest` fills a day with one placed, one declined and one missed meal so the card and history have something to show.
 
 **Notifications** appear as toasts when a run finishes, when a digest is written, and when slots are marked missed on reconnect. **Desktop alerts** asks the browser for permission so the same messages arrive when the tab isn't in front.
@@ -155,6 +155,8 @@ MACROME_EMAIL_FROM="MacroMe <digest@yourdomain.com>"   # optional
 ```
 
 Until you verify a domain, MacroMe sends from Resend's shared `onboarding@resend.dev`, and Resend will only deliver to **the address your Resend account was created with** — any other recipient comes back as a 403 explaining exactly that. That is enough to demo; for anyone else's inbox, verify a domain at resend.com/domains and point `MACROME_EMAIL_FROM` at it.
+
+Gitignored `macrome-digests.json.*.email.json` receipts prevent repeated sends for the same date and recipients, including through MCP and after restart. If delivery times out or the process exits mid-send, the receipt stays unconfirmed and automatic resend is suppressed because delivery may already have happened.
 
 Mail is best-effort and never blocks a run: the digest is already on disk and on the dashboard by the time it is attempted, and a failure is reported as a notification (carrying Resend's own message) rather than an error.
 

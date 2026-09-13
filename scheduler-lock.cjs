@@ -3,13 +3,13 @@
 // The web server runs the minute cron in-process, and `npm run schedule` still
 // exists for people who'd rather run it alone. If both are up they would fire
 // the same meal twice, so whichever starts first takes this lock and the other
-// sits out until the holder stops (or dies and its heartbeat goes stale).
+// sits out until the holder stops or dies.
 const fs = require('fs');
 const path = require('path');
 
 const LOCK_PATH = process.env.MACROME_SCHEDULER_LOCK || path.join(__dirname, 'macrome-scheduler.lock');
-// Two and a half missed heartbeats: long enough that a slow tick never steals
-// the lock from a healthy process, short enough that a `kill -9` frees it fast.
+// Used to set the heartbeat interval. Ownership is based on process liveness,
+// so a slow or suspended live process cannot lose its cart to another scheduler.
 const STALE_MS = 150000;
 
 function read(file = LOCK_PATH) {
@@ -31,7 +31,8 @@ function alive(pid) {
 }
 
 function held(lock, now) {
-  return Boolean(lock) && now - Date.parse(lock.heartbeatAt) < STALE_MS && alive(lock.pid);
+  // A paused but live owner may still be driving a cart. Never steal its clock.
+  return Boolean(lock) && alive(lock.pid);
 }
 
 /** Who owns the cron right now, or null if it is free. */
@@ -40,11 +41,17 @@ function holder(file = LOCK_PATH, now = Date.now()) {
   return held(lock, now) ? lock : null;
 }
 
-function write(owner, file, now) {
+function write(owner, file, now, exclusive = false) {
   const body = JSON.stringify({ pid: process.pid, owner, host: require('os').hostname(), heartbeatAt: new Date(now).toISOString() }, null, 2);
   const temporary = `${file}.${process.pid}.tmp`;
   fs.writeFileSync(temporary, body);
-  fs.renameSync(temporary, file);
+  try {
+    // A hard link publishes complete JSON and fails atomically if already owned.
+    if (exclusive) fs.linkSync(temporary, file);
+    else fs.renameSync(temporary, file);
+  } finally {
+    try { fs.unlinkSync(temporary); } catch (err) { if (err.code !== 'ENOENT') throw err; }
+  }
 }
 
 /**
@@ -54,15 +61,21 @@ function write(owner, file, now) {
  */
 function acquire(owner, file = LOCK_PATH, now = Date.now()) {
   const lock = read(file);
-  if (lock && lock.pid !== process.pid && held(lock, now)) return false;
-  write(owner, file, now);
-  return true;
+  if (lock && lock.pid === process.pid) { write(owner, file, now); return true; }
+  if (lock && held(lock, now)) return false;
+  if (lock) {
+    if (JSON.stringify(read(file)) !== JSON.stringify(lock)) return false;
+    try { fs.unlinkSync(file); } catch (err) { if (err.code !== 'ENOENT') throw err; }
+  }
+  // Exclusive creation is essential: read-then-rename lets two boots both win.
+  try { write(owner, file, now, true); return true; }
+  catch (err) { if (err.code === 'EEXIST') return false; throw err; }
 }
 
 /** Keep the claim fresh; false means someone else took over and we must stand down. */
 function heartbeat(owner, file = LOCK_PATH, now = Date.now()) {
   const lock = read(file);
-  if (lock && lock.pid !== process.pid && held(lock, now)) return false;
+  if (!lock || lock.pid !== process.pid) return false;
   write(owner, file, now);
   return true;
 }

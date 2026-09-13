@@ -10,6 +10,7 @@
 // go to stderr only.
 const fs = require('fs');
 const path = require('path');
+require('dotenv').config({ path: [path.join(__dirname, '.env'), path.join(__dirname, 'doordash-macro-agent/.env')], quiet: true });
 const { McpServer } = require('@modelcontextprotocol/sdk/server/mcp.js');
 const { StdioServerTransport } = require('@modelcontextprotocol/sdk/server/stdio.js');
 const { z } = require('zod');

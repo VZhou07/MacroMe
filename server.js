@@ -12,8 +12,9 @@
 const http = require('http');
 const fs = require('fs');
 const path = require('path');
+require('dotenv').config({ path: [path.join(__dirname, '.env'), path.join(__dirname, 'doordash-macro-agent/.env')], quiet: true });
 const { spawn } = require('child_process');
-const { upcomingOrders, markCompleted } = require('./order-queue.cjs');
+const { upcomingOrders, markCompleted, markAttempted } = require('./order-queue.cjs');
 const dayLog = require('./day-log.cjs');
 const digests = require('./digest.cjs');
 const { startTicker } = require('./scheduler-core.cjs');
@@ -143,6 +144,7 @@ function handleEvent(event) {
 }
 
 function startRun(scheduledOrder) {
+  if (scheduledOrder.id) markAttempted(scheduledOrder.id);
   run = newRun(scheduledOrder.meal);
   run.scheduledOrder = scheduledOrder;
   const tsx = path.join(AGENT_DIR, 'node_modules', '.bin', 'tsx');
@@ -186,7 +188,7 @@ function startRun(scheduledOrder) {
   child.on('close', (code) => {
     child = null;
     if (!run) return;
-    if (run.status === 'awaiting-approval' || run.status === 'running' || run.status === 'starting') {
+    if (run.status === 'placing' || run.status === 'awaiting-approval' || run.status === 'running' || run.status === 'starting') {
       // The process ended without reporting an outcome — surface that rather
       // than leaving the dashboard spinning forever.
       run.status = code === 0 ? 'done' : 'error';
@@ -290,7 +292,7 @@ const routes = {
     sendJson(res, 200, {
       date,
       timezone: plan.timezone || 'UTC',
-      digestTime: digests.digestTime(plan),
+      digestTime: digests.digestTime(plan, date),
       dueAt: dueAt ? dueAt.toISOString() : null,
       final: Boolean(saved),
       today: saved || digests.buildDigest(plan, date, dayLog.entriesForDate(date)),
@@ -316,7 +318,12 @@ const routes = {
     if (!run || run.status !== 'awaiting-approval' || !child) {
       return sendJson(res, 409, { error: 'Nothing is waiting for approval.' });
     }
+    const approvingRun = run;
+    const approvingChild = child;
     const { approve } = await readBody(req);
+    if (run !== approvingRun || child !== approvingChild || !child || run.status !== 'awaiting-approval') {
+      return sendJson(res, 409, { error: 'This approval is no longer pending.' });
+    }
     if (typeof approve !== 'boolean') return sendJson(res, 400, { error: '`approve` must be true or false' });
     if (approve && (!run.approval?.cartItems?.length || !run.approval.checkoutTotal)) {
       return sendJson(res, 409, { error: 'Full cart details are missing. Start a new run before approving.' });
@@ -335,7 +342,9 @@ const routes = {
 };
 
 http.createServer(async (req, res) => {
-  const urlPath = decodeURIComponent(req.url.split('?')[0]);
+  let urlPath;
+  try { urlPath = decodeURIComponent(req.url.split('?')[0]); }
+  catch { return sendJson(res, 400, { error: 'Invalid URL' }); }
   const route = routes[`${req.method} ${urlPath}`];
 
   if (route) {

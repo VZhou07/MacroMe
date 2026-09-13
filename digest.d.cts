@@ -13,7 +13,7 @@ export interface Digest {
   meals: DigestMeal[];
   summary: string;
 }
-export interface DigestPlan { timezone?: string; digestTime?: string; macros?: Macros; meals?: { time: string }[] }
+export interface DigestPlan { timezone?: string; digestTime?: string; macros?: Macros; meals?: { time: string }[]; schedule?: { day: string; time: string }[] }
 export interface DigestOptions { file?: string; dayLogFile?: string; now?: Date }
 export declare const DIGEST_PATH: string;
 export function buildDigest(plan: DigestPlan, date: string, entries: DayLogEntry[], now?: Date): Digest;
@@ -23,7 +23,7 @@ export function readDigests(file?: string): Record<string, Digest>;
 export function getDigest(date: string, file?: string): Digest | null;
 export function listDigests(file?: string, limit?: number): Digest[];
 export function writeDigest(digest: Digest, file?: string): Digest;
-export function digestTime(plan: DigestPlan): string;
+export function digestTime(plan: DigestPlan, date?: string): string;
 export function digestDueAt(plan: DigestPlan, date: string): Date | null;
 export function parseMoney(total: string | null): { amount: number; currency: string } | null;
 export function today(plan: DigestPlan, now?: Date): string;

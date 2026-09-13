@@ -1,7 +1,13 @@
-# MacroMe user plan (contains addresses)
+# MacroMe personal state: the plan (contains addresses), the order queue's
+# lifecycle, what was eaten and spent, the saved end-of-day digests, and the
+# lock that decides which process owns the cron.
 macrome-config.json
 macrome-queue-state.json
-macrome-queue-state.json.*.tmp
+macrome-day-log.json
+macrome-digests.json
+macrome-scheduler.lock
+macrome-*.tmp
+macrome-*.json.*.tmp
 
 node_modules/
 .env
@@ -23,3 +29,7 @@ venv/
 node_modules/
 
 doordash-macro-agent/reports/
+
+# Persistent digest email deduplication receipts
+macrome-digests.json.*.email.json
+macrome-scheduler.lock.*

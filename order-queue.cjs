@@ -7,7 +7,7 @@
 // the schedule is derived, only the lifecycle is stored.
 const fs = require('fs');
 const path = require('path');
-const { DAYS, dateParts, atTime } = require('./tz.cjs');
+const { DAYS, dateParts, atTime, localDate, instantAt } = require('./tz.cjs');
 
 const STATE_PATH = process.env.MACROME_QUEUE_STATE || path.join(__dirname, 'macrome-queue-state.json');
 // How far back a restart will look for slots it slept through. A laptop closed
@@ -119,7 +119,12 @@ function occurrencesBetween(plan, from, to) {
   return orders.sort((a, b) => a.orderAt.localeCompare(b.orderAt) || a.id.localeCompare(b.id));
 }
 
-function upcomingOrders(plan, completed = readCompleted(), now = new Date(), limit = 5) {
+function readExcluded(file = STATE_PATH) {
+  const state = readState(file);
+  return new Set(KINDS.flatMap((kind) => [...state[kind]]));
+}
+
+function upcomingOrders(plan, completed = readExcluded(), now = new Date(), limit = 5) {
   const horizon = new Date(now.getTime() + 14 * 86400000);
   return occurrencesBetween(plan, now, horizon).filter((order) => !completed.has(order.id)).slice(0, limit);
 }
@@ -136,8 +141,9 @@ function reconcileMissed(plan, now = new Date(), file = STATE_PATH) {
   const state = readState(file);
   const seen = state.lastSeenAt ? new Date(state.lastSeenAt) : null;
   const floor = new Date(now.getTime() - RECONCILE_WINDOW_DAYS * 86400000);
-  const from = !seen || !Number.isFinite(seen.getTime()) || seen >= now ? null
-    : seen < floor ? floor : seen;
+  const from = !seen || !Number.isFinite(seen.getTime())
+    ? instantAt(localDate(now, plan.timezone || 'UTC'), '00:00', plan.timezone || 'UTC')
+    : seen >= now ? now : seen < floor ? floor : seen;
   const newly = from === null ? [] : occurrencesBetween(plan, from, now)
     .filter((order) => !KINDS.some((kind) => state[kind].has(order.id)));
   for (const order of newly) state.missed.add(order.id);
@@ -148,5 +154,5 @@ function reconcileMissed(plan, now = new Date(), file = STATE_PATH) {
 
 module.exports = {
   STATE_PATH, upcomingOrders, occurrencesBetween, readState, writeState,
-  readCompleted, markCompleted, markMissed, markAttempted, reconcileMissed,
+  readCompleted, readExcluded, markCompleted, markMissed, markAttempted, reconcileMissed,
 };

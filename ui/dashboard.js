@@ -5,6 +5,16 @@
 
 const $ = (sel) => document.querySelector(sel);
 const esc = (s) => String(s).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+async function getJson(url) {
+  const res = await fetch(url, { signal: AbortSignal.timeout(10000) });
+  if (!res.ok) {
+    const error = new Error((await res.json().catch(() => ({}))).error || `Request failed (${res.status})`);
+    error.status = res.status;
+    throw error;
+  }
+  return res.json();
+}
+
 const money = (n) => `$${Number(n).toFixed(2)}`;
 const POLL_MS = 1500;
 // Digests move once a day; only the live run needs a 1.5s heartbeat.
@@ -181,12 +191,17 @@ function renderRun(state) {
   lastStatus = state.status;
 }
 
+let polling = false;
 async function poll() {
+  if (polling) return;
+  polling = true;
   try {
-    const state = await (await fetch('/api/run')).json();
+    const state = await getJson('/api/run');
     renderRun(state);
     handleNotifications(state);
-  } catch { /* server restarting; the next tick picks it back up */ }
+  } catch (err) {
+    $('#nextOrderLabel').textContent = `Unable to load orders: ${err.message}. Retrying…`;
+  } finally { polling = false; }
 }
 
 // ---------- notifications ----------
@@ -320,11 +335,15 @@ function renderDigests(payload) {
     </details></li>`).join('');
 }
 
+let loadingDigests = false;
 async function loadDigests() {
+  if (loadingDigests) return;
+  loadingDigests = true;
   try {
-    const res = await fetch('/api/digests');
-    if (res.ok) renderDigests(await res.json());
-  } catch { /* server restarting; the next refresh picks it up */ }
+    renderDigests(await getJson('/api/digests'));
+  } catch (err) {
+    $('#todaySummary').textContent = `Unable to load summary: ${err.message}. Retrying…`;
+  } finally { loadingDigests = false; }
 }
 
 async function post(url, body) {
@@ -393,12 +412,19 @@ async function decide(approve) {
 }
 
 (async function init() {
-  const res = await fetch('/api/config');
-  if (!res.ok) { window.location.href = '/setup'; return; }
-  plan = await res.json();
-  renderPlan();
-  renderAlertsButton();
-  await Promise.all([poll(), loadDigests()]);
+  try {
+    plan = await getJson('/api/config');
+    renderPlan();
+    renderAlertsButton();
+  } catch (err) {
+    if (err.status === 404) { window.location.href = '/setup'; return; }
+    showError(`Unable to load your plan: ${err.message}. Retrying…`);
+    setTimeout(init, 5000);
+    return;
+  }
+  showError(null);
+  poll();
+  loadDigests();
   setInterval(poll, POLL_MS);
   setInterval(loadDigests, DIGEST_POLL_MS);
 })();

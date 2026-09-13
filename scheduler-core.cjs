@@ -44,7 +44,7 @@ async function tick(options) {
     result.missed.push(recordMissed(occurrence, plan, OFFLINE_NOTE, { ...options, now: minute }));
   }
 
-  const due = queue.upcomingOrders(plan, queue.readCompleted(options.queueFile), minute, MAX_DUE_PER_MINUTE)
+  const due = queue.upcomingOrders(plan, queue.readExcluded(options.queueFile), minute, MAX_DUE_PER_MINUTE)
     .filter((occurrence) => occurrence.orderAt === minute.toISOString());
   for (const occurrence of due) {
     // A run in progress owns the DoorDash cart; a second one would fight it.

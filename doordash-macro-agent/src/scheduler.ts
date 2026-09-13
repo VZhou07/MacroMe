@@ -10,21 +10,28 @@ import { markCompleted } from "../../order-queue.cjs";
 import { startTicker } from "../../scheduler-core.cjs";
 import type { ScheduledOrder } from "../../order-queue.cjs";
 
+let running = false;
+
 startTicker({
   owner: "npm run schedule",
   loadPlan: () => loadPlan().raw,
-  runOrder: async (occurrence: ScheduledOrder) => {
-    const plan = loadPlan();
-    const meal = plan.config.meals.find((entry) => entry.name === occurrence.meal);
-    if (!meal) {
-      console.error(`[scheduler] "${occurrence.meal}" is no longer in the plan — skipping.`);
-      return;
-    }
-    console.log(`[scheduler] Firing ${occurrence.meal} for ${occurrence.eatAt}`);
-    // Approval still happens in the terminal; nothing is charged without it.
-    if (await runMealOrder(meal, new Date(occurrence.eatAt), { occurrenceId: occurrence.id })) {
-      markCompleted(occurrence.id);
-    }
+  canRun: () => !running,
+  runOrder: (occurrence: ScheduledOrder) => {
+    running = true;
+    void (async () => {
+      const plan = loadPlan();
+      const meal = plan.config.meals.find((entry) => entry.name === occurrence.meal);
+      if (!meal) {
+        console.error(`[scheduler] "${occurrence.meal}" is no longer in the plan — skipping.`);
+        return;
+      }
+      console.log(`[scheduler] Firing ${occurrence.meal} for ${occurrence.eatAt}`);
+      // Approval still happens in the terminal; nothing is charged without it.
+      if (await runMealOrder(meal, new Date(occurrence.eatAt), { occurrenceId: occurrence.id })) {
+        markCompleted(occurrence.id);
+      }
+    })().catch((err) => console.error("[scheduler] Run failed:", err))
+      .finally(() => { running = false; });
   },
   onTick: (result) => {
     for (const entry of result.missed) console.log(`[scheduler] Missed ${entry.meal} on ${entry.date} — ${entry.note}`);
