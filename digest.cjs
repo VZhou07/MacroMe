@@ -196,19 +196,9 @@ function generateDigest(plan, date, options = {}) {
   return writeDigest(buildDigest(plan, date, entries, options.now || new Date()), options.file);
 }
 
-/** True when enough meals are placed to lock the day before EOD (demo / full day). */
-function dayMealsComplete(plan, date, options = {}) {
-  const needed = Array.isArray(plan.meals) ? plan.meals.length : 0;
-  if (needed <= 0) return false;
-  const placed = dayLog.entriesForDate(date, options.dayLogFile)
-    .filter((entry) => entry.status === 'placed').length;
-  return placed >= needed;
-}
-
 /**
  * Write any digest whose end-of-day time has passed and that doesn't exist yet,
- * or whose planned meals are all already placed (hackathon: update Today → Final
- * after the last meal without waiting for evening).
+ * or whose planned meals are all already placed (hackathon: Today → Final after 3/3).
  *
  * Called from the same minute tick as the order queue, so a machine that was
  * off all evening still writes yesterday's digest as soon as it comes back.
