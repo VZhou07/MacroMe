@@ -1,21 +1,23 @@
 # MacroMe
 
-MacroMe is a macro-aware DoorDash ordering agent with a web wizard and live dashboard.
+DoorDash ordering that actually respects your macros.
 
-You set calorie and protein goals, meal times, budget, delivery details, and food preferences once. MacroMe opens a cloud browser, searches nearby restaurants, picks a meal that fits that slot, shows you the live cart, and waits for your approval before anything is charged. Leave the app running and scheduled meals start on time.
+Tell MacroMe your calorie and protein goals, meal times, budget, and food prefs once. When a meal is due, it opens a real browser, hunts nearby restaurants, builds a cart that fits the slot, and waits for you to approve before anything is charged. Leave it running and it’ll kick off meals on schedule.
 
-**Stack in one line:** Node web app + Steel cloud browser + Playwright + OpenRouter meal picker + local USDA nutrition DB + JSON files on disk (for now).
+**2nd place** in the WebAgent track at [Battle of the Schools](https://www.utwat.ca) (UTMIST × Wat.ai, Sept 12–13 2026 — UofT vs Waterloo).
+
+Built with a Node web app, Steel cloud browser, Playwright, OpenRouter for meal picking, a local USDA nutrition DB, and plain JSON files on disk.
 
 ## What you get
 
-- **Onboarding wizard** for macros, meals, schedule, budget, addresses, and preferences
-- **Dashboard** with upcoming orders, **Run now**, live Steel browser view, and approvals
-- **Scheduler** that fires meals at each order time from the same `npm run dev` process
-- **Today** live macro/spend summary, plus **Final** end-of-day digests (dashboard and optional email)
-- **Missed meal tracking** when the laptop was asleep (recorded, never ordered late)
-- **Optional MCP tools** so Cursor, Claude Code, or Codex can read today’s summary or email a digest
+- Setup wizard for macros, meals, schedule, budget, addresses, and preferences
+- Dashboard with upcoming orders, **Run now**, live browser view, and cart approval
+- Scheduler that fires meals at each order time from the same `npm run dev` process
+- Live **Today** macro/spend summary, plus **Final** end-of-day digests (dashboard and optional email)
+- Missed meals recorded when the laptop was asleep — never ordered late
+- Optional MCP tools so Cursor, Claude Code, or Codex can read today’s summary or email a digest
 
-Nothing is charged until someone presses **Place order** (unless demo place mode is on; see below).
+Nothing is charged until you press **Place order** (unless demo place mode is on).
 
 ## How it fits together
 
@@ -32,11 +34,11 @@ Browser UI (wizard / dashboard)
  doordash-macro-agent  ──▶  Steel session → scrape menus → pick meal → cart → approval
 ```
 
-`macrome-config.json` is the source of truth for your plan. Queue state, day log, and digests are separate files so a restart still knows what already happened.
+`macrome-config.json` is your plan. Queue state, day log, and digests live in separate files so a restart still knows what already happened.
 
-## Local setup (hackathon / personal use)
+## Local setup
 
-This is the supported path today. MacroMe expects a long-lived Node process on your machine.
+This is the supported path today. MacroMe wants a long-lived Node process on your machine.
 
 ### 1. Install
 
