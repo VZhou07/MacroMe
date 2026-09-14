@@ -20,11 +20,12 @@ export function cartContainsMeal(cart: CheckoutSummary, pick: PickedMeal): boole
 
 /** One copy of each component, from one restaurant. Partial adds need inspection. */
 export async function addMealToCart(page: Page, pick: PickedMeal,
-  add: (page: Page, url: string, itemId: string) => Promise<AddToCartResult>): Promise<AddToCartResult> {
+  add: (page: Page, url: string, itemId: string, options?: { clearExisting?: boolean }) => Promise<AddToCartResult>): Promise<AddToCartResult> {
   let added = 0;
   for (const component of mealComponents(pick)) {
     try {
-      const result = await add(page, pick.storeUrl, component.itemId);
+      // Clear leftovers only before the first component so combos can stack.
+      const result = await add(page, pick.storeUrl, component.itemId, { clearExisting: added === 0 });
       if (!result.ok) return added ? { ok: false, reason: 'add-unconfirmed' } : result;
       added++;
     } catch (error) {

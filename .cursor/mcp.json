@@ -1,8 +1,9 @@
 {
   "mcpServers": {
     "macrome": {
-      "command": "node",
-      "args": ["mcp-server.cjs"]
+      "type": "stdio",
+      "command": "${workspaceFolder}/scripts/macrome-mcp.sh",
+      "envFile": "${workspaceFolder}/doordash-macro-agent/.env"
     }
   }
 }

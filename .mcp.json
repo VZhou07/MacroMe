@@ -1,8 +1,7 @@
 {
   "mcpServers": {
     "macrome": {
-      "command": "node",
-      "args": ["${CLAUDE_PROJECT_DIR:-.}/mcp-server.cjs"]
+      "command": "${CLAUDE_PROJECT_DIR:-.}/scripts/macrome-mcp.sh"
     }
   }
 }

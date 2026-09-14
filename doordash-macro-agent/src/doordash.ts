@@ -132,6 +132,40 @@ async function cartCount(page: Page): Promise<number> {
   return parseInt(text.match(/\d+/)?.[0] ?? "0", 10);
 }
 
+/** Remove leftover lines so a new meal never stacks on top of an old cart. */
+export async function emptyCart(page: Page): Promise<void> {
+  let count = await cartCount(page);
+  if (count <= 0) return;
+  console.log(`[doordash] Clearing ${count} leftover cart item(s) before the new meal…`);
+  await page.keyboard.press('Escape').catch(() => {});
+  await page.waitForTimeout(300);
+  if (!(await appears(page, '[data-testid="CheckoutButton"]', 2500))) {
+    await page.locator('[data-testid="OrderCartIconButton"]').first().click({ timeout: 8000 }).catch(() => {});
+  }
+  await appears(page, '[data-anchor-id="OrderCartItem"]', 8000);
+
+  for (let guard = 0; guard < 30; guard++) {
+    const rows = page.locator('[data-anchor-id="OrderCartItem"]');
+    if ((await rows.count()) === 0) break;
+    const row = rows.first();
+    await row.locator('[data-testid="QuantityContainer"]').hover().catch(() => {});
+    const qtyText = await row.locator('[data-testid="stepper-expanded-quantity"]').textContent().catch(() => '1');
+    const qty = Math.max(1, Number(qtyText?.match(/\d+/)?.[0] ?? 1));
+    for (let step = 0; step < qty; step++) {
+      if ((await rows.count()) === 0) break;
+      await rows.first().locator('[data-testid="QuantityContainer"]').hover().catch(() => {});
+      await rows.first().locator('[data-testid="stepper-decrement-button"]').click({ timeout: 5000 }).catch(() => {});
+      await page.waitForTimeout(350);
+    }
+  }
+
+  count = await cartCount(page);
+  if (count > 0) console.log(`[doordash] Cart still shows ${count} after clear; Start New Cart may replace it on add.`);
+  else console.log('[doordash] Cart is empty.');
+  await page.keyboard.press('Escape').catch(() => {});
+  await page.waitForTimeout(400);
+}
+
 export type AddToCartResult = { ok: true } | { ok: false; reason: string };
 
 async function sessionEndedVisible(page: Page): Promise<boolean> {
@@ -209,37 +243,6 @@ export async function fillRequiredOptions(page: Page): Promise<number> {
   });
 }
 
-/** True when the item modal still demands required choices the agent cannot finish. */
-async function unresolvedRequiredOptions(page: Page): Promise<boolean> {
-  const addBtn = page.locator('[data-testid^="AddToCartButton"]').first();
-  const label = ((await addBtn.innerText().catch(() => '')) || '').replace(/\s+/g, ' ').trim();
-  if (/required selection/i.test(label)) return true;
-  if (!(await addBtn.isEnabled().catch(() => false))) return true;
-  return page.evaluate(() => {
-    const visible = (el: Element) => {
-      const style = window.getComputedStyle(el);
-      const rect = el.getBoundingClientRect();
-      return style.display !== 'none' && style.visibility !== 'hidden' && rect.width > 0 && rect.height > 0;
-    };
-    for (const el of document.querySelectorAll('h1, h2, h3, h4, span, div, p, legend, label')) {
-      const text = (el.textContent ?? '').replace(/\s+/g, ' ').trim();
-      // Optional sections (e.g. Extra Protein) are fine to skip.
-      if (!/\brequired\b/i.test(text) || /\boptional\b/i.test(text) || text.length > 120) continue;
-      const section = el.closest('section, fieldset, [data-testid], li, div') ?? el.parentElement;
-      if (!section || !visible(section)) continue;
-      const selected = section.querySelector(
-        'input[type="radio"]:checked, [role="radio"][aria-checked="true"], input[type="checkbox"]:checked',
-      );
-      if (selected) continue;
-      const choices = section.querySelectorAll(
-        'input[type="radio"], [role="radio"], input[type="checkbox"], button, [role="button"]',
-      );
-      if (choices.length > 0) return true;
-    }
-    return false;
-  });
-}
-
 async function itemModalOpen(page: Page): Promise<boolean> {
   return page.locator('[data-testid^="AddToCartButton"]').first().isVisible().catch(() => false);
 }
@@ -253,7 +256,12 @@ async function confirmNewCartIfPrompted(page: Page): Promise<void> {
   }
 }
 
-export async function addItemToCart(page: Page, storeUrl: string, itemId: string): Promise<AddToCartResult> {
+export async function addItemToCart(
+  page: Page,
+  storeUrl: string,
+  itemId: string,
+  options: { clearExisting?: boolean } = {},
+): Promise<AddToCartResult> {
   // Background tabs are throttled and DoorDash's virtualized menu never renders in them.
   await focus(page);
   console.log(`[doordash] addItemToCart: itemId=${itemId} store=${storeUrl}`);
@@ -262,6 +270,11 @@ export async function addItemToCart(page: Page, storeUrl: string, itemId: string
   // wait for the store header and let the scroll loop below find the card.
   await navigate(page, storeUrl, '[data-testid="storeInfo"]', `cart / ${storeUrl}`);
   if (await sessionEndedVisible(page)) return { ok: false, reason: "session-ended" };
+
+  // Default: wipe leftovers so we never stack meals and blow the budget.
+  if (options.clearExisting !== false) {
+    await emptyCart(page);
+  }
 
   const before = await cartCount(page);
   console.log(`[doordash] cart count before: ${before}`);
@@ -291,7 +304,7 @@ export async function addItemToCart(page: Page, storeUrl: string, itemId: string
 
   // Required modifiers (milk, size, …) leave the button disabled / relabeled
   // ("Make 1 required selection"). Auto-pick the first option in each group.
-  for (let attempt = 0; attempt < 4; attempt++) {
+  for (let attempt = 0; attempt < 5; attempt++) {
     if (await sessionEndedVisible(page)) {
       console.log("[doordash] session ended while on item modal");
       return { ok: false, reason: "session-ended" };
@@ -299,27 +312,24 @@ export async function addItemToCart(page: Page, storeUrl: string, itemId: string
     const enabled = await addBtn.isEnabled().catch(() => false);
     const label = ((await addBtn.innerText().catch(() => "")) || "").replace(/\s+/g, " ").trim();
     console.log(`[doordash] add button attempt ${attempt + 1}: enabled=${enabled} label="${label}"`);
-    if (enabled && !/required selection/i.test(label) && !(await unresolvedRequiredOptions(page))) break;
+    // Trust DoorDash's own button copy. Do not run a DOM "required" scan here —
+    // it false-positived on ready items (Mocha Lift) and skipped every pick.
+    if (enabled && !/required selection/i.test(label)) break;
 
     const filled = await fillRequiredOptions(page);
     console.log(`[doordash] auto-selected ${filled} required option(s)`);
-    if (filled === 0 && (!enabled || /required selection/i.test(label))) {
-      await page.keyboard.press("Escape").catch(() => {});
-      return { ok: false, reason: "required-options-unfilled" };
-    }
-    await page.waitForTimeout(400);
+    // Keep trying; some required rows only appear after a short scroll.
+    await addBtn.evaluate((el) => {
+      const modal = el.closest('[role="dialog"], [data-testid], section, div');
+      (modal as HTMLElement | null)?.scrollBy?.(0, 280);
+    }).catch(() => {});
+    await page.waitForTimeout(500);
   }
 
-  if (await unresolvedRequiredOptions(page)) {
-    const label = ((await addBtn.innerText().catch(() => "")) || "").replace(/\s+/g, " ").trim();
-    console.log(`[doordash] skipping item — unresolved required options remain (button="${label}")`);
-    await page.keyboard.press("Escape").catch(() => {});
-    return { ok: false, reason: "required-options-unfilled" };
-  }
-
-  if (!(await addBtn.isEnabled().catch(() => false))) {
-    const label = ((await addBtn.innerText().catch(() => "")) || "").replace(/\s+/g, " ").trim();
-    console.log(`[doordash] add still disabled after filling options: "${label}"`);
+  const enabled = await addBtn.isEnabled().catch(() => false);
+  const label = ((await addBtn.innerText().catch(() => '')) || '').replace(/\s+/g, ' ').trim();
+  if (!enabled || /required selection/i.test(label)) {
+    console.log(`[doordash] skipping item — still needs required options (button="${label}")`);
     await page.keyboard.press("Escape").catch(() => {});
     return { ok: false, reason: "required-options-unfilled" };
   }
@@ -349,13 +359,26 @@ export async function addItemToCart(page: Page, storeUrl: string, itemId: string
   for (let attempt = 0; attempt < 6; attempt++) {
     const after = await cartCount(page);
     console.log(`[doordash] cart count after: ${after}`);
-    if (after > before) return { ok: true };
+    if (after > before) {
+      // After a fresh-cart add, only this meal's lines should remain.
+      if (options.clearExisting !== false && after > 1) {
+        console.log(`[doordash] Cart has ${after} items after add (expected 1); clearing and trying another pick.`);
+        await emptyCart(page);
+        return { ok: false, reason: 'cart-overfull' };
+      }
+      return { ok: true };
+    }
     if (!(await page.locator('[data-testid="CheckoutButton"]').first().isVisible().catch(() => false))) {
       await page.locator('[data-testid="OrderCartIconButton"]').click({ timeout: 5000 }).catch(() => {});
       await page.waitForTimeout(600);
     }
     const cart = await readCheckout(page, false).catch(() => null);
     if (cart?.cartItems.some((line) => line.name.toLowerCase() === nameNeedle || (nameNeedle && line.name.toLowerCase().includes(nameNeedle)))) {
+      if (options.clearExisting !== false && cart.cartItems.length > 1) {
+        console.log('[doordash] Cart has leftover lines beside the new item; clearing and trying another pick.');
+        await emptyCart(page);
+        return { ok: false, reason: 'cart-overfull' };
+      }
       console.log(`[doordash] confirmed ${itemName} in the cart`);
       return { ok: true };
     }

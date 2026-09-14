@@ -63,7 +63,7 @@ export function estimateMacrosFromName(name: string, price: number): MealMacros 
 }
 
 /**
- * Always returns up to 3 real menu items when any in-budget dishes exist.
+ * Always returns real menu items when any in-budget dishes exist.
  * Used when the LLM times out, returns junk, or refuses every dish.
  */
 export function fallbackPicks(
@@ -71,7 +71,9 @@ export function fallbackPicks(
   target: MealMacros,
   budgetPerMeal: number,
   _internalReason = '',
+  maxPicks = 3,
 ): PickedMeal[] {
+  const limit = Math.max(1, Math.min(12, Math.floor(maxPicks) || 3));
   const candidates: PickedMeal[] = [];
   for (const menu of menus) {
     for (const item of menu.items) {
@@ -98,19 +100,19 @@ export function fallbackPicks(
   const picks: PickedMeal[] = [];
   const seen = new Set<string>();
   for (const candidate of candidates) {
-    if (picks.length >= 3) break;
-    if (seen.has(candidate.storeUrl) && picks.length < 3 && candidates.length > 3) continue;
+    if (picks.length >= limit) break;
+    if (seen.has(candidate.storeUrl) && picks.length < limit && candidates.length > limit) continue;
     picks.push(candidate);
     seen.add(candidate.storeUrl);
   }
-  if (picks.length === 0) return candidates.slice(0, 3);
+  if (picks.length === 0) return candidates.slice(0, limit);
   // Fill remaining slots if we skipped too aggressively.
   for (const candidate of candidates) {
-    if (picks.length >= 3) break;
+    if (picks.length >= limit) break;
     if (picks.some((pick) => pick.selectionId === candidate.selectionId)) continue;
     picks.push(candidate);
   }
-  return picks.slice(0, 3);
+  return picks.slice(0, limit);
 }
 
 /** Offline recommendation when DoorDash itself is unreachable. */

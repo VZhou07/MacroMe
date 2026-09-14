@@ -380,6 +380,10 @@ async function orderMeal(mealConfig: MealConfig, scheduledFor: Date, record: Par
         'No in-budget menu items survived filtering.');
     }
 
+    // Stick to a short ranked list — stacking many adds was blowing past budget
+    // when leftovers stayed in the DoorDash cart.
+    console.log(`[agent] Will try up to ${result.picks.length} cart candidate(s) before falling back to a recommendation.`);
+
     let picked = null;
     let orderPage = page;
     for (const candidate of result.picks) {
