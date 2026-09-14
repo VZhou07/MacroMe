@@ -4,7 +4,7 @@ DoorDash ordering that actually respects your macros.
 
 Tell MacroMe your calorie and protein goals, meal times, budget, and food prefs once. When a meal is due, it opens a real browser, hunts nearby restaurants, builds a cart that fits the slot, and waits for you to approve before anything is charged. Leave it running and it’ll kick off meals on schedule.
 
-**2nd place** in the WebAgent track at [Battle of the Schools](https://www.utwat.ca) (UTMIST × Wat.ai, Sept 12–13 2026 — UofT vs Waterloo).
+**2nd place** in the WebAgent track at [Battle of the Schools](https://www.utwat.ca) (UTMIST × Wat.ai, UofT vs Waterloo). [View Devpost](https://devpost.com/software/macrome-xm5c3r#updates)
 
 Built with a Node web app, Steel cloud browser, Playwright, OpenRouter for meal picking, a local USDA nutrition DB, and plain JSON files on disk.
 
