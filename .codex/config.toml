@@ -2,5 +2,5 @@
 # Same MacroMe stdio server as Cursor and Claude Code.
 
 [mcp_servers.macrome]
-command = "./scripts/macrome-mcp.sh"
-cwd = ".."
+command = "/home/vincent/GooseGPT/scripts/macrome-mcp.sh"
+cwd = "/home/vincent/GooseGPT"

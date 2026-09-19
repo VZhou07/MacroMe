@@ -58,6 +58,8 @@ export interface StoreMenu {
 }
 
 export interface MealComponent {
+  selectedOptions?: string[];
+  customizationPrice?: number;
   itemId: string;
   item: string;
   price: number;
@@ -65,6 +67,8 @@ export interface MealComponent {
 }
 
 export interface PickedMeal {
+  selectedOptions?: string[];
+  customizationPrice?: number;
   selectionId?: string; // distinguishes a main alone from a combination containing it
   // One or two distinct items from the same restaurant; legacy picks omit this.
   components?: MealComponent[];

@@ -10,7 +10,9 @@ export interface RunReport {
   rawResponse: string;
   candidates: PickedMeal[]; // ranked, best first
   chosenItemId: string | null;
-  skipped: { item: string; reason: string }[];
+  skipped: { item: string; reason: string; details?: unknown }[];
+  addAttempts?: unknown[];
+  checkoutRecovery?: unknown;
   checkoutTotal: string | null;
   approved: boolean | null;
   timestamp: string;
@@ -37,6 +39,7 @@ function candidateCard(c: PickedMeal, rank: number, isChosen: boolean): string {
       <p class="meta">${esc(c.restaurant)} &middot; $${c.price.toFixed(2)} &middot; score ${c.score.toFixed(3)} (lower is better)</p>
       <p>${sourceBadge} ${consistencyBadge}</p>
       <table class="macros">${macroRow("Estimated/verified", c.estimatedMacros)}</table>
+      <p>${esc((c.selectedOptions ?? c.components?.flatMap(c => c.selectedOptions ?? []) ?? []).join(", "))}</p>
       <p class="reasoning">"${esc(c.reasoning)}"</p>
     </div>`;
 }
@@ -90,6 +93,7 @@ export function writeReport(run: RunReport): string {
     ${run.approved === null ? "Not reached / not yet decided" : run.approved ? "Order placed" : "Declined — item left in cart"}
   </p>
 
+  <details><summary>Cart and option evidence</summary><pre>${esc(JSON.stringify({ adds: run.addAttempts, recovery: run.checkoutRecovery, failures: run.skipped }, null, 2))}</pre></details>
   <h2>Raw model prompt and response</h2>
   <details>
     <summary>System prompt</summary>
@@ -110,5 +114,6 @@ export function writeReport(run: RunReport): string {
   const safeMeal = run.mealName.replace(/[^a-z0-9]+/gi, "-");
   const path = `reports/${run.timestamp.replace(/[:.]/g, "-")}-${safeMeal}.html`;
   writeFileSync(path, html);
+  writeFileSync(path.replace(/\.html$/, ".json"), JSON.stringify(run, null, 2));
   return path;
 }

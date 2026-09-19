@@ -192,6 +192,20 @@ npm run mcp
 
 Configs in-repo: `.cursor/mcp.json`, `.mcp.json`, `.codex/config.toml`. Point another project at MacroMe with absolute paths and `cwd` set to this repo. MCP does not keep the scheduler alive; `npm run dev` still must be running for orders.
 
+### Sandbox prerequisites and cart validation
+
+The Codex MCP configuration uses this checkout's absolute launcher and working directory. If you move the checkout, update both paths in `.codex/config.toml`. The launcher resolves nvm's Node with a minimal PATH and keeps startup diagnostics on stderr.
+
+On Ubuntu, run `bash scripts/setup-sandbox.sh` in a terminal with sudo access to install bubblewrap and verify user-namespace startup. On Ubuntu 24.04 the script installs the additional AppArmor profile only if the initial check fails. It follows the [official sandbox prerequisites](https://learn.chatgpt.com/docs/sandboxing) and does not disable AppArmor globally.
+
+Required food options are selected within the item dialog using the meal goals, dietary restrictions, avoided ingredients, and food budget. Optional extras stay unchanged. Unresolved choices stop the add and appear in the HTML/JSON decision report. Customized nutrition is re-estimated for the whole serving; it is not labeled USDA verified.
+
+Cart confirmation requires matching item lines, quantities, and selected modifiers. A timed-out or uncertain add closes its browser tab and reconciles through a fresh cart inspection before another mutation. An unreadable cart or failed cleanup stops further additions.
+
+Run `npm test` at the root for application and MCP checks, and `npm test --prefix doordash-macro-agent` for browser, checkout, recovery, modifier, picker, and session checks. Browser tests require an installed Playwright-compatible Chromium (`CHROMIUM_PATH` can specify its executable) and its shared libraries.
+
+`npm run trials:cart --prefix doordash-macro-agent` requests 20 cart-only attempts across five restaurants and saves a structured report. It never invokes Place Order. From the agent directory, `npm run trials:cart -- --from=reports/cart-trials-<timestamp>.json` reuses observed candidate IDs; menus are still checked live. Reconcile any uncertain prior cart before restarting trials: from the agent directory, run `node --import tsx scripts/reconcile-trial.ts reports/cart-trials-<timestamp>.json` and require `cleared: true`. Cart verification and checkout readiness are reported separately; fewer than 20 completed attempts do not establish the acceptance target.
+
 ## Why local now (not Vercel-style serverless)
 
 Ordering needs:
@@ -268,4 +282,4 @@ Default meal model: `nvidia/nemotron-3-super-120b-a12b:free` via OpenRouter. Ove
 
 ## Repo
 
-https://github.com/VZhou07/GooseGPT
+https://github.com/VZhou07/MacroMe

@@ -13,7 +13,10 @@
     "build-nutrition-db": "tsx scripts/build-nutrition-db.ts",
     "join-nutrition-db": "tsx scripts/join-nutrition-db.ts",
     "test:session": "node --import tsx --test tests/session.test.mts",
-    "test:timeouts": "node --import tsx --test tests/browser-work.test.mts tests/macro-picker.test.mts"
+    "test:timeouts": "node --import tsx --test tests/browser-work.test.mts tests/macro-picker.test.mts",
+    "test": "node --import tsx --test tests/*.test.mts",
+    "test:cart": "node --import tsx --test tests/modifiers.test.mts tests/cart-add.test.mts tests/cart-reconciliation.test.mts",
+    "trials:cart": "tsx scripts/live-cart-trials.ts"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.39.0",

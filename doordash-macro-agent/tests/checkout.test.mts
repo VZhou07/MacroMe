@@ -23,7 +23,7 @@ const checkout = (lines: string, count: number, total = 'CA$53.32') => `
   <h2>${count} items</h2>${lines}<button data-testid="PlaceOrderButton">Place Order ${total}</button>`;
 
 test('required options run inside the browser without TypeScript helper errors', async () => {
-  await page.setContent('<input type="radio" name="size" value="small"><input type="radio" name="size" value="large">');
+  await page.setContent('<div role="dialog"><fieldset><legend>Size Required</legend><input type="radio" name="size" value="small"><input type="radio" name="size" value="large"></fieldset></div>');
   assert.equal(await fillRequiredOptions(page), 1);
   assert.equal(await page.locator('input:checked').count(), 1);
   assert.equal(await fillRequiredOptions(page), 0);
@@ -94,7 +94,10 @@ test('refuses empty, incomplete, count-mismatched and price-less checkouts', asy
   }
 });
 
-test('a changed cart or total cannot be placed using a previous approval', async () => {
+test('a changed cart or total cannot be placed using a previous approval', async (t) => {
+  const previous = process.env.MACROME_DEMO_PLACE;
+  process.env.MACROME_DEMO_PLACE = '0';
+  t.after(() => { if (previous === undefined) delete process.env.MACROME_DEMO_PLACE; else process.env.MACROME_DEMO_PLACE = previous; });
   await page.setContent(checkout(line('Bowl'), 1));
   const approved = await readCheckout(page);
   for (const html of [checkout(line('Bowl'), 1, 'CA$60.00'), checkout(line('Bowl') + line('Leftover'), 2)]) {
@@ -151,4 +154,10 @@ test('dashboard lists the full cart, labels the pick and escapes scraped text', 
   queued.upcoming = [];
   await page.evaluate((value) => (window as any).renderRun(value), queued);
   assert.equal(await page.locator('#runNow').isEnabled(), false);
+});
+test('reads observed drawer rows without requiring checkout navigation', async()=>{
+  for (const role of ['listitem', 'button']) {
+  await page.setContent(`<button data-testid="OrderCartIconButton">0</button><div role="${role}" data-anchor-id="OrderCartItem" aria-label="click to open modal and edit item: Bowl "><span>Bowl</span><span title="Tofu">Tofu</span><div data-testid="QuantityContainer"><span data-testid="stepper-expanded-quantity">1 ×</span><button><span>Decrease quantity</span></button></div><span>$16.35</span></div>`);
+  assert.deepEqual(await readCheckout(page,false),{cartItems:[{name:'Bowl',quantity:1,linePrice:'$16.35',modifiers:['Tofu']}],checkoutTotal:''});
+  }
 });

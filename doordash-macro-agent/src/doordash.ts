@@ -1,3 +1,4 @@
+import { resolveRequiredOptions, assessCustomization, type ModifierContext, type ModifierResult } from './modifiers.js';
 import type { Page } from "playwright-core";
 import type { CheckoutSummary, MenuItem, StoreMenu } from "./types.js";
 
@@ -21,23 +22,13 @@ function parsePrice(text: string): number {
   return match ? parseFloat(match[1]) : NaN;
 }
 
-/**
- * Build-your-own chains need protein/rice/bean choices the agent cannot fill
- * reliably — skip them during discovery so demos land on simpler menus.
- */
-export function isUnsupportedCustomStore(name: string, url = ''): boolean {
-  const haystack = `${name} ${url}`.toLowerCase();
-  return /\bchipotle\b/.test(haystack);
-}
-
 export async function findStores(page: Page, query: string, max: number): Promise<{ name: string; url: string }[]> {
   const term = query.trim();
   const url = term ? `${BASE}/search/store/${encodeURIComponent(term)}/` : `${BASE}/`;
-  await navigate(page, url, 'a[href*="/store/"]', `search / ${term || 'browse restaurants'}`);
+  await navigate(page, url, 'a[href*="/store/"]', `search / ${term || 'browse restaurants'}`, { attemptMs: 35000 });
   await page.waitForTimeout(2000);
 
   const stores = new Map<string, { name: string; url: string }>();
-  const skipped = new Set<string>();
   let stagnant = 0;
   for (let pass = 0; pass < 12 && stores.size < max && stagnant < 3; pass++) {
   const before = stores.size;
@@ -59,13 +50,6 @@ export async function findStores(page: Page, query: string, max: number): Promis
     // redirects slowly or lands on a shell without menu cards.
     const clean = href.split(/[?#]/)[0].replace(/\/?$/, "/");
     const storeUrl = clean.startsWith("http") ? clean : `${BASE}${clean}`;
-    if (isUnsupportedCustomStore(name, storeUrl)) {
-      if (!skipped.has(id)) {
-        skipped.add(id);
-        console.log(`[doordash] Skipping ${name} (build-your-own options the agent cannot complete).`);
-      }
-      continue;
-    }
     if (!stores.has(id)) stores.set(id, { name, url: storeUrl });
     if (stores.size >= max) break;
   }
@@ -132,10 +116,31 @@ async function cartCount(page: Page): Promise<number> {
   return parseInt(text.match(/\d+/)?.[0] ?? "0", 10);
 }
 
+async function closeCartDrawer(page: Page): Promise<void> {
+  const close = page.locator('[data-testid="dbd-pre-checkout-header-close-button"]:visible').first();
+  if (await close.isVisible().catch(() => false)) await close.click({ timeout: 5000 });
+  else await page.keyboard.press('Escape').catch(() => {});
+}
+
+/** Menu scrolling must not depend on a pointer left over the cart drawer. */
+async function scrollMenu(page: Page): Promise<void> {
+  await page.evaluate(() => {
+    const card = document.querySelector('[data-testid="MenuItem"]') ?? document.querySelector('[data-testid="storeInfo"]');
+    let panel = card?.parentElement;
+    while (panel) {
+      if (panel.scrollHeight > panel.clientHeight + 5 && /auto|scroll/.test(getComputedStyle(panel).overflowY)) {
+        panel.scrollBy(0, 1200); return;
+      }
+      panel = panel.parentElement;
+    }
+    document.scrollingElement?.scrollBy(0, 1200);
+  });
+}
+
 /** Remove leftover lines so a new meal never stacks on top of an old cart. */
 export async function emptyCart(page: Page): Promise<void> {
   let count = await cartCount(page);
-  if (count <= 0) return;
+
   console.log(`[doordash] Clearing ${count} leftover cart item(s) before the new meal…`);
   await page.keyboard.press('Escape').catch(() => {});
   await page.waitForTimeout(300);
@@ -160,91 +165,27 @@ export async function emptyCart(page: Page): Promise<void> {
   }
 
   count = await cartCount(page);
-  if (count > 0) console.log(`[doordash] Cart still shows ${count} after clear; Start New Cart may replace it on add.`);
-  else console.log('[doordash] Cart is empty.');
-  await page.keyboard.press('Escape').catch(() => {});
+  if (await page.locator('[data-anchor-id="OrderCartItem"]').count()) throw new Error('cart-clear-failed');
+  const empty = await page.getByText(/your cart is empty|cart is empty|no items in your cart/i).first().isVisible().catch(() => false);
+  if (!empty) throw new Error('cart-empty-unverified');
+  await closeCartDrawer(page);
   await page.waitForTimeout(400);
 }
 
-export type AddToCartResult = { ok: true } | { ok: false; reason: string };
+export type AddToCartResult = ({ ok: true } | { ok: false; reason: string }) & {
+  status?: 'confirmed' | 'failed' | 'uncertain'; phase?: string;
+  selectedOptions?: string[]; diagnostics?: unknown; customization?: ModifierResult;
+};
+export type AddOptions = ModifierContext & { clearExisting?: boolean; onCustomization?: (result: ModifierResult) => void };
 
 async function sessionEndedVisible(page: Page): Promise<boolean> {
   return page.getByText(/session ended/i).first().isVisible().catch(() => false);
 }
 
-/**
- * DoorDash item modals often require at least one choice (milk, size, …).
- * Pick the first unselected option in each radio group so Add becomes enabled.
- * Returns how many options we clicked.
- */
 export async function fillRequiredOptions(page: Page): Promise<number> {
-  return page.evaluate(() => {
-    // Object methods survive tsx's keepNames transform without an external
-    // __name helper, which does not exist in the remote browser.
-    const { visible } = { visible(el: Element) {
-      const style = window.getComputedStyle(el);
-      const rect = el.getBoundingClientRect();
-      return style.display !== "none" && style.visibility !== "hidden" && rect.width > 0 && rect.height > 0;
-    } };
-
-    let clicked = 0;
-
-    const radios = [...document.querySelectorAll<HTMLInputElement>('input[type="radio"]')].filter(visible);
-    const byName = new Map<string, HTMLInputElement[]>();
-    for (const radio of radios) {
-      const key = radio.name || radio.id;
-      if (!key) continue;
-      const list = byName.get(key) ?? [];
-      list.push(radio);
-      byName.set(key, list);
-    }
-    for (const opts of byName.values()) {
-      if (opts.some((o) => o.checked)) continue;
-      const pick = opts.find((o) => !o.disabled);
-      if (!pick) continue;
-      pick.click();
-      clicked++;
-    }
-
-    const roleRadios = [...document.querySelectorAll('[role="radio"]')].filter(visible);
-    const roleGroups = new Map<Element, HTMLElement[]>();
-    for (const radio of roleRadios) {
-      const group = radio.closest('[role="radiogroup"]') ?? radio.parentElement;
-      if (!group) continue;
-      const list = roleGroups.get(group) ?? [];
-      list.push(radio as HTMLElement);
-      roleGroups.set(group, list);
-    }
-    for (const opts of roleGroups.values()) {
-      if (opts.some((o) => o.getAttribute("aria-checked") === "true")) continue;
-      opts[0]?.click();
-      clicked++;
-    }
-
-    // Fallback: sections labeled Required with no selection yet — click the first
-    // clickable option row under that heading.
-    for (const el of document.querySelectorAll("h1, h2, h3, h4, span, div, p, legend")) {
-      const text = (el.textContent ?? "").replace(/\s+/g, " ").trim();
-      if (!/required/i.test(text) || text.length > 120) continue;
-      const section = el.closest("section, fieldset, [data-testid], li, div") ?? el.parentElement;
-      if (!section) continue;
-      const already = section.querySelector('input[type="radio"]:checked, [role="radio"][aria-checked="true"]');
-      if (already) continue;
-      const option =
-        section.querySelector<HTMLElement>('input[type="radio"]:not(:disabled)') ??
-        section.querySelector<HTMLElement>('[role="radio"]') ??
-        section.querySelector<HTMLElement>('label, [role="button"], button');
-      if (!option || !visible(option)) continue;
-      option.click();
-      clicked++;
-    }
-
-    return clicked;
-  });
-}
-
-async function itemModalOpen(page: Page): Promise<boolean> {
-  return page.locator('[data-testid^="AddToCartButton"]').first().isVisible().catch(() => false);
+  const before = await page.locator('input:checked, [aria-checked="true"]').count();
+  await resolveRequiredOptions(page);
+  return (await page.locator('input:checked, [aria-checked="true"]').count()) - before;
 }
 
 async function confirmNewCartIfPrompted(page: Page): Promise<void> {
@@ -260,7 +201,7 @@ export async function addItemToCart(
   page: Page,
   storeUrl: string,
   itemId: string,
-  options: { clearExisting?: boolean } = {},
+  options: AddOptions = {},
 ): Promise<AddToCartResult> {
   // Background tabs are throttled and DoorDash's virtualized menu never renders in them.
   await focus(page);
@@ -268,28 +209,41 @@ export async function addItemToCart(
 
   // Full menu cards only render once scrolled past the featured carousel, so
   // wait for the store header and let the scroll loop below find the card.
-  await navigate(page, storeUrl, '[data-testid="storeInfo"]', `cart / ${storeUrl}`);
-  if (await sessionEndedVisible(page)) return { ok: false, reason: "session-ended" };
+  await navigate(page, storeUrl, ['[data-testid="storeInfo"]', '[data-testid="MenuItem"]'], `cart / ${storeUrl}`, { attemptMs: 35000 });
+  if (await sessionEndedVisible(page)) return { ok: false, status: "failed", phase: "navigation", reason: "session-ended" };
 
   // Default: wipe leftovers so we never stack meals and blow the budget.
   if (options.clearExisting !== false) {
     await emptyCart(page);
   }
 
+  let baseline: CheckoutSummary = { cartItems: [], checkoutTotal: '' };
+  if (options.clearExisting === false) {
+    if (!(await page.locator('[data-testid="CheckoutButton"]').first().isVisible().catch(() => false))) {
+      await page.locator('[data-testid="OrderCartIconButton"]').first().click({ timeout: 5000 }).catch(() => {});
+      await page.waitForTimeout(500);
+    }
+    const observed = await readCheckout(page, false).catch(() => null);
+    const empty = await page.getByText(/your cart is empty|cart is empty|no items in your cart/i).first().isVisible().catch(() => false);
+    if (!observed && !empty) return { ok: false, status: 'failed', phase: 'baseline', reason: 'cart-baseline-unreadable' };
+    if (observed) baseline = observed;
+    await closeCartDrawer(page);
+  }
   const before = await cartCount(page);
   console.log(`[doordash] cart count before: ${before}`);
 
   const card = page.locator(`[data-testid="MenuItem"][data-item-id="${itemId}"]`);
   for (let i = 0; i < 40 && (await card.count()) === 0; i++) {
-    await page.mouse.wheel(0, 1200);
+    await scrollMenu(page);
     await page.waitForTimeout(500);
   }
   if ((await card.count()) === 0) {
     console.log(`[doordash] menu card not found for itemId=${itemId}`);
-    return { ok: false, reason: "item-not-found" };
+    return { ok: false, status: "failed", phase: "navigation", reason: "item-not-found" };
   }
 
   const itemName = (await card.locator('[data-telemetry-id="storeMenuItem.title"]').innerText().catch(() => "")).trim();
+  options = { ...options, description: (await card.innerText()).slice(0, 1500) };
   console.log(`[doordash] opening item modal: ${itemName || itemId}`);
   await card.scrollIntoViewIfNeeded();
   await card.locator('[role="button"]').first().click();
@@ -299,93 +253,57 @@ export async function addItemToCart(
   if ((await addBtn.count()) === 0) {
     console.log("[doordash] AddToCart button never appeared");
     await page.keyboard.press("Escape").catch(() => {});
-    return { ok: false, reason: "no-add-button" };
+    return { ok: false, status: "failed", phase: "dialog", reason: "no-add-button" };
   }
 
-  // Required modifiers (milk, size, …) leave the button disabled / relabeled
-  // ("Make 1 required selection"). Auto-pick the first option in each group.
-  for (let attempt = 0; attempt < 5; attempt++) {
-    if (await sessionEndedVisible(page)) {
-      console.log("[doordash] session ended while on item modal");
-      return { ok: false, reason: "session-ended" };
-    }
-    const enabled = await addBtn.isEnabled().catch(() => false);
-    const label = ((await addBtn.innerText().catch(() => "")) || "").replace(/\s+/g, " ").trim();
-    console.log(`[doordash] add button attempt ${attempt + 1}: enabled=${enabled} label="${label}"`);
-    // Trust DoorDash's own button copy. Do not run a DOM "required" scan here —
-    // it false-positived on ready items (Mocha Lift) and skipped every pick.
-    if (enabled && !/required selection/i.test(label)) break;
-
-    const filled = await fillRequiredOptions(page);
-    console.log(`[doordash] auto-selected ${filled} required option(s)`);
-    // Keep trying; some required rows only appear after a short scroll.
-    await addBtn.evaluate((el) => {
-      const modal = el.closest('[role="dialog"], [data-testid], section, div');
-      (modal as HTMLElement | null)?.scrollBy?.(0, 280);
-    }).catch(() => {});
-    await page.waitForTimeout(500);
-  }
-
+  // The footer can render before the item data and required controls settle.
+  await page.waitForFunction(() => {
+    const button = document.querySelector('[data-testid^="AddToCartButton"]') as HTMLButtonElement | null;
+    const root = button?.closest('[role="dialog"], [aria-modal="true"]');
+    return !!root && (!!root.querySelector('input,select,[role="radio"],[role="checkbox"],[role="combobox"]') ||
+      (!!button && !button.disabled && !/required selection/i.test(button.innerText)));
+  }, undefined, { timeout: 5000 }).catch(() => {});
+  const dialogDescription = await addBtn.evaluate(el => {
+    const root = el.closest('[role="dialog"], [aria-modal="true"]') as HTMLElement | null;
+    return root?.innerText.slice(0, 4000) ?? '';
+  });
+  options = { ...options, dialogDescription };
+  const customization = await resolveRequiredOptions(page, options);
+  await assessCustomization(options, customization);
+  const detail = { selectedOptions: customization.selectedOptions, customization, diagnostics: { item: itemName, description: options.description } };
   const enabled = await addBtn.isEnabled().catch(() => false);
-  const label = ((await addBtn.innerText().catch(() => '')) || '').replace(/\s+/g, ' ').trim();
-  if (!enabled || /required selection/i.test(label)) {
-    console.log(`[doordash] skipping item — still needs required options (button="${label}")`);
-    await page.keyboard.press("Escape").catch(() => {});
-    return { ok: false, reason: "required-options-unfilled" };
+  const label = await addBtn.innerText().catch(() => '');
+  if (!customization.complete || !enabled || /required selection/i.test(label)) {
+    return { ok: false, status: 'failed', phase: 'options', reason: `required-options-unfilled: ${customization.unresolved.join('; ') || label}`, ...detail };
   }
-
+  options.onCustomization?.(customization);
+  // Once the click starts, any exception is an uncertain mutation.
+  try {
   await addBtn.click({ timeout: 10000 });
   console.log("[doordash] clicked Add to cart");
   await confirmNewCartIfPrompted(page);
 
-  // A successful add dismisses the modal. If it stays open, the click did not commit.
+  await page.keyboard.press('Escape').catch(() => {});
   for (let attempt = 0; attempt < 8; attempt++) {
-    await confirmNewCartIfPrompted(page);
-    if (!(await itemModalOpen(page))) break;
-    await page.waitForTimeout(500);
-  }
-  if (await itemModalOpen(page)) {
-    console.log('[doordash] item modal still open after Add — treating as failed add');
-    await page.keyboard.press("Escape").catch(() => {});
-    return { ok: false, reason: "add-unconfirmed" };
-  }
-
-  await page.waitForTimeout(1500);
-  if (await sessionEndedVisible(page)) return { ok: false, reason: "session-ended" };
-
-  // The badge can update late, or reset when switching restaurants. Inspect
-  // the cart itself as well before deciding whether the add succeeded.
-  const nameNeedle = itemName.toLowerCase();
-  for (let attempt = 0; attempt < 6; attempt++) {
-    const after = await cartCount(page);
-    console.log(`[doordash] cart count after: ${after}`);
-    if (after > before) {
-      // After a fresh-cart add, only this meal's lines should remain.
-      if (options.clearExisting !== false && after > 1) {
-        console.log(`[doordash] Cart has ${after} items after add (expected 1); clearing and trying another pick.`);
-        await emptyCart(page);
-        return { ok: false, reason: 'cart-overfull' };
-      }
-      return { ok: true };
-    }
     if (!(await page.locator('[data-testid="CheckoutButton"]').first().isVisible().catch(() => false))) {
-      await page.locator('[data-testid="OrderCartIconButton"]').click({ timeout: 5000 }).catch(() => {});
-      await page.waitForTimeout(600);
+      await page.locator('[data-testid="OrderCartIconButton"]').first().click({ timeout: 3000 }).catch(() => {});
     }
     const cart = await readCheckout(page, false).catch(() => null);
-    if (cart?.cartItems.some((line) => line.name.toLowerCase() === nameNeedle || (nameNeedle && line.name.toLowerCase().includes(nameNeedle)))) {
-      if (options.clearExisting !== false && cart.cartItems.length > 1) {
-        console.log('[doordash] Cart has leftover lines beside the new item; clearing and trying another pick.');
-        await emptyCart(page);
-        return { ok: false, reason: 'cart-overfull' };
-      }
-      console.log(`[doordash] confirmed ${itemName} in the cart`);
-      return { ok: true };
+    const lines = cart?.cartItems.filter(line => line.name.toLowerCase() === itemName.toLowerCase()) ?? [];
+    const modifiersMatch = customization.selectedOptions.every(option => lines.some(line =>
+      line.modifiers.some(modifier => modifier.toLowerCase().includes(option.replace(/\+\s*(?:CA)?\$[\d.]+/g, '').trim().toLowerCase()))));
+    if (lines.reduce((n,line)=>n+line.quantity,0) === 1 && modifiersMatch &&
+        cart?.cartItems.reduce((n,line)=>n+line.quantity,0) === baseline.cartItems.reduce((n,line)=>n+line.quantity,0) + 1 &&
+        baseline.cartItems.every(old => cart.cartItems.some(line => line.name === old.name && line.quantity === old.quantity && JSON.stringify(line.modifiers) === JSON.stringify(old.modifiers)))) {
+      return { ok: true, status: 'confirmed', phase: 'cart', ...detail, diagnostics: cart };
     }
     await page.waitForTimeout(800);
   }
-  console.log(`[doordash] add did not land in cart for ${itemName || itemId}; will try another pick`);
-  return { ok: false, reason: "add-unconfirmed" };
+  return { ok: false, status: 'uncertain', phase: 'cart', reason: 'add-unconfirmed', ...detail };
+  } catch (error) {
+    return { ok: false, status: 'uncertain', phase: 'add', reason: 'add-unconfirmed', ...detail,
+      diagnostics: { error: error instanceof Error ? error.message.split('\n')[0] : 'add failed' } };
+  }
 }
 
 function appears(page: Page, selector: string, timeout: number): Promise<boolean> {
@@ -470,6 +388,8 @@ export async function readCheckout(page: Page, requireTotal = true): Promise<Che
 
     const rowSelector = '[data-anchor-id="OrderItemContainer"], [data-testid="OrderCartItem"], [data-testid="CartItem"], [data-testid="CheckoutItem"], [data-testid="OrderItem"], [data-testid="order-cart-item"]';
     let rows = [...document.querySelectorAll(rowSelector)].filter(visible);
+    const drawerRows = [...document.querySelectorAll('[data-anchor-id="OrderCartItem"]')].filter(visible);
+    if (!requireTotal && drawerRows.length) rows = drawerRows;
     // Keep only the outer row when wrappers share a test id; don't merge
     // equal names because differently customized dishes can be separate lines.
     rows = rows.filter((row) => !rows.some((other) => other !== row && other.contains(row)));
@@ -497,12 +417,12 @@ export async function readCheckout(page: Page, requireTotal = true): Promise<Che
         .map((el) => text(el)).filter(Boolean);
       const lines = [...new Set([...leafTexts, ...text(row).split(/\n+/).map((s) => s.trim()).filter(Boolean)])];
       const nameEl = row.querySelector('[data-testid="CartItemName"], [data-testid="OrderCartItemName"], [data-telemetry-id="orderCartItem.name"], [data-telemetry-id="orderCartItem.title"], h3, h4');
-      const quantityEl = row.querySelector<HTMLInputElement>('[data-testid="CartItemQuantity"], [data-testid="OrderCartItemQuantity"], input[type="number"], select, [role="spinbutton"]');
+      const quantityEl = row.querySelector<HTMLInputElement>('[data-testid="CartItemQuantity"], [data-testid="OrderCartItemQuantity"], [data-testid="stepper-expanded-quantity"], input[type="number"], select, [role="spinbutton"]');
       const quantityText = quantityEl?.value || quantityEl?.getAttribute("aria-valuenow") || text(quantityEl);
       const quantityLine = lines.find((s) => /^(?:(?:qty|quantity)\s*:?\s*|[x×]\s*)?\d+\s*[x×]?$/i.test(s));
       const quantityMatch = (quantityText || quantityLine || "").match(/\d+/);
       const quantity = quantityMatch ? Number(quantityMatch[0]) : NaN;
-      const name = text(nameEl) || lines.find((s) => s !== quantityLine && !s.match(money) && !/^(?:edit|remove|delete|quantity|qty)(?:\s|$)/i.test(s)) || "";
+      const name = (text(nameEl) || (row.getAttribute('aria-label') ?? '').replace(/^click to open modal and edit item:\s*/i, '') || lines.find((s) => s !== quantityLine && !s.match(money) && !/^(?:edit|remove|delete|quantity|qty)(?:\s|$)/i.test(s)) || "").trim();
       const priceEl = row.querySelector('[data-testid="CartItemPrice"], [data-testid="OrderCartItemPrice"]');
       // Ignore struck-through original prices and modifier surcharges.
       const priceLines = [...row.querySelectorAll('*')].filter((el) =>
@@ -514,7 +434,11 @@ export async function readCheckout(page: Page, requireTotal = true): Promise<Che
       if (!name || !Number.isSafeInteger(quantity) || quantity < 1 || prices.length !== 1) {
         throw new Error("Could not read every cart line's name, quantity and price. Order was not approved or placed.");
       }
-      const detailLines = [...row.querySelectorAll('*')].filter((el) => visible(el) && !el.children.length && !el.closest('button, [role="button"], s, del, select'))
+      const detailLines = [...row.querySelectorAll('*')].filter((el) => {
+        const action = el.closest('button, [role="button"], s, del, select');
+        // Drawer rows themselves can be edit buttons; their food details still count.
+        return visible(el) && !el.children.length && (!action || action === row || !row.contains(action));
+      })
         .map((el) => text(el)).filter(Boolean);
       const modifiers = detailLines.filter((s) => s !== name && s !== quantityLine && s !== quantityText &&
         !new RegExp(`^${money.source}$`).test(s) && !/^(?:edit|remove|delete)(?:\s|$)/i.test(s));
@@ -534,21 +458,38 @@ export async function readCheckout(page: Page, requireTotal = true): Promise<Che
   }, requireTotal);
 }
 
+/** Inspect the drawer without requiring the checkout page to be ready. */
+export async function inspectCart(page: Page): Promise<CheckoutSummary | null> {
+  await page.keyboard.press('Escape').catch(() => {});
+  for (let read = 0; read < 3; read++) {
+    const current = await readCheckout(page, false).catch(() => null);
+    if (current) return current;
+    if (await page.getByText(/your cart is empty|cart is empty|no items in your cart/i).first().isVisible().catch(() => false)) {
+      return { cartItems: [], checkoutTotal: '' };
+    }
+    if (!(await page.locator('[data-testid="CheckoutButton"]').first().isVisible().catch(() => false))) {
+      await page.locator('[data-testid="OrderCartIconButton"]').first().click({ timeout: 5000 }).catch(() => {});
+    }
+    await page.waitForTimeout(800);
+  }
+  return null;
+}
+
 async function openEditableCart(page: Page, expected: CheckoutSummary): Promise<void> {
-  const current = await readCheckout(page);
+  const current = await readCheckout(page, !!expected.checkoutTotal);
   if (JSON.stringify(current) !== JSON.stringify(expected)) throw new Error('Cart changed before editing; inspect it again');
   const back = page.getByRole('link', { name: 'Back to Store', exact: true });
   if (await back.isVisible()) {
     await back.click();
-    await page.locator('[data-testid="storeInfo"]').waitFor({ timeout: 15000 });
+    await page.locator('[data-testid="storeInfo"], [data-testid="MenuItem"]').first().waitFor({ state: 'attached', timeout: 15000 });
     await page.waitForTimeout(1500);
   }
-  if (!(await page.locator('[data-testid="CheckoutButton"]').first().isVisible().catch(() => false))) {
-    await page.locator('[data-testid="OrderCartIconButton"]').click();
+  if (!(await page.locator('[data-anchor-id="OrderCartItem"]:visible').first().isVisible().catch(() => false))) {
+    await page.locator('[data-testid="OrderCartIconButton"]:visible').first().click({ timeout: 10000 });
   }
-  await page.locator('[data-anchor-id="OrderCartItem"]').first().waitFor({ timeout: 15000 });
-  const actual = await page.locator('[data-anchor-id="OrderCartItem"]').evaluateAll((rows) => rows.map((row) => ({
-    name: (row.getAttribute('aria-label') ?? '').replace(/^click to open modal and edit item:\s*/i, ''),
+  await page.locator('[data-anchor-id="OrderCartItem"]:visible').first().waitFor({ timeout: 15000 });
+  const actual = await page.locator('[data-anchor-id="OrderCartItem"]:visible').evaluateAll((rows) => rows.map((row) => ({
+    name: (row.getAttribute('aria-label') ?? '').replace(/^click to open modal and edit item:\s*/i, '').trim(),
     quantity: Number(row.querySelector('[data-testid="stepper-expanded-quantity"]')?.textContent?.match(/\d+/)?.[0]),
   })));
   const wanted = expected.cartItems.map(({ name, quantity }) => ({ name, quantity }));

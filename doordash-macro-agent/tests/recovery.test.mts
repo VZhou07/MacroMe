@@ -128,5 +128,29 @@ test('combination adds stop on a partial failure so recovery cannot blindly dupl
     return {ok:true};
   });
   assert.deepEqual(calls,['1','2']);
-  assert.deepEqual(result,{ok:false,reason:'add-unconfirmed'});
+  assert.equal(result.ok, false);
+  assert.equal(result.status, 'uncertain');
+  assert.match(result.reason, /Navigation timed out/);
+});
+test('uncertain checkout replacement cancels and reconciles before inspecting the new page',async()=>{
+  const fresh={...page} as Page;
+  let current=cart('CA$50.00'),adds=0,clears=0,reconciles=0;
+  const result=await prepareCheckout(page,pick,[cheap],options,{
+    inspect:async tab=>{if(reconciles)assert.equal(tab,fresh);return current;},
+    edit:async()=>assert.fail('Unexpected edit'),clear:async()=>{clears++;},
+    add:async()=>{adds++;return {ok:false,status:'uncertain',reason:'click timed out'};},
+    decide:async()=>({action:'replace',candidate:0,reasoning:'Lower price'}),
+    reconcile:async()=>{reconciles++;current=cart('CA$19.00',['Rice bowl']);return {page:fresh,matched:true,cart:current};},
+  });
+  assert.equal(result.page,fresh);assert.equal(adds,1);assert.equal(clears,1);assert.equal(reconciles,1);
+});
+test('failed replacement reconciliation stops recovery before another mutation',async()=>{
+  let adds=0;
+  await assert.rejects(prepareCheckout(page,pick,[cheap],options,{
+    inspect:async()=>cart('CA$50.00'),edit:async()=>{},clear:async()=>{},
+    add:async()=>{adds++;return {ok:false,status:'uncertain',reason:'timeout'};},
+    decide:async()=>({action:'replace',candidate:0,reasoning:'Lower price'}),
+    reconcile:async()=>{throw Error('cart unreadable');},
+  }),/could not be reconciled/);
+  assert.equal(adds,1);
 });

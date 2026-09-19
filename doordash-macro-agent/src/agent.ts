@@ -1,3 +1,4 @@
+import { reconcileUncertainAdd } from './cart-reconciliation.js';
 import "dotenv/config";
 import { pathToFileURL } from "url";
 import { chromium, type Browser } from "playwright-core";
@@ -5,7 +6,7 @@ import Steel from "steel-sdk";
 import { createSession } from "./session.js";
 import { assertConnected, bounded, BrowserUnavailableError, closePage, PageWorkError, whileSessionLive, withStorePage } from "./browser-work.js";
 import { loadPlan } from "./plan.js";
-import { addItemToCart, demoPlaceEnabled, findStores, isUnsupportedCustomStore, placeOrder, scrapeMenu } from "./doordash.js";
+import { addItemToCart, demoPlaceEnabled, findStores, placeOrder, scrapeMenu } from "./doordash.js";
 import { pickMeals } from "./macro-picker.js";
 import { fallbackPicks, syntheticRecommendation } from "./fallback-picks.js";
 import { printCartSummary, printOrderSummary, promptApproval } from "./notifier.js";
@@ -125,8 +126,7 @@ async function presentRecommendationOnly(
   const picked = preferred
     ? preferred
     : syntheticRecommendation(mealConfig.name, target, budgetPerMeal, preferences);
-  // Keep failure detail in logs/modifiers only — Why stays demo-confident.
-  if (why) console.log(`[agent] Recommendation context (hidden from Why): ${why}`);
+  if (why) picked.reasoning = `${picked.reasoning} Cart status: ${why}`;
   record.pick = pickRecord(picked);
   printOrderSummary(mealConfig, picked);
   emit({
@@ -192,7 +192,9 @@ async function orderMeal(mealConfig: MealConfig, scheduledFor: Date, record: Par
   };
 
   const menus = isDryRun ? MOCK_MENUS : [];
-  const skipped: { item: string; reason: string }[] = [];
+  const skipped: { item: string; reason: string; details?: unknown }[] = [];
+  const addAttempts: unknown[] = [];
+  let checkoutRecovery: unknown = null;
   let checkoutTotal: string | null = null;
   let approved: boolean | null = null;
   let chosenItemId: string | null = null;
@@ -210,7 +212,7 @@ async function orderMeal(mealConfig: MealConfig, scheduledFor: Date, record: Par
       rawResponse: result.debug.rawResponse,
       candidates: result.picks,
       chosenItemId,
-      skipped,
+      skipped, addAttempts, checkoutRecovery,
       checkoutTotal,
       approved,
       timestamp: new Date().toISOString(),
@@ -316,11 +318,7 @@ async function orderMeal(mealConfig: MealConfig, scheduledFor: Date, record: Par
       stores = await bounded(findStores(page, config.searchQuery || 'healthy', storePool),
         Math.min(45000, Math.max(5000, searchDeadline - Date.now())), 'search / restaurant discovery retry').catch(() => []);
     }
-    stores = shuffled(stores).filter((store) => {
-      if (!isUnsupportedCustomStore(store.name, store.url)) return true;
-      console.log(`[agent] Skipping ${store.name} (build-your-own options the agent cannot complete).`);
-      return false;
-    });
+    stores = shuffled(stores);
     if (stores.length === 0) {
       console.log('[agent] No stores found — offering an offline recommendation so the run still completes.');
       return presentRecommendationOnly(mealConfig, record, target, config.budgetPerMeal, plan.raw.preferences || {},
@@ -400,26 +398,29 @@ async function orderMeal(mealConfig: MealConfig, scheduledFor: Date, record: Par
       });
       // Fresh tab per attempt, same reason as the menu scrape above.
       assertConnected(activeBrowser);
-      const tab = await bounded(context.newPage(), 10000, `${candidate.restaurant} / cart tab`);
+      let tab = await bounded(context.newPage(), 10000, `${candidate.restaurant} / cart tab`);
       let addResult: Awaited<ReturnType<typeof addItemToCart>>;
       try {
-        addResult = await bounded(addMealToCart(tab, candidate, addItemToCart),
-          90000, `${candidate.restaurant} / add to cart`);
+        addResult = await bounded(addMealToCart(tab, candidate, addItemToCart, { target, preferences: plan.raw.preferences, budget: config.budgetPerMeal }),
+          150000, `${candidate.restaurant} / add to cart`);
       } catch (err) {
         assertConnected(activeBrowser);
         if (err instanceof BrowserUnavailableError) throw err;
-        if (err instanceof PageWorkError) {
-          // Navigation failures happen before any mutation. Other failures can
-          // be ambiguous; retain the existing inspection-before-retry path.
-          await closePage(tab, `${candidate.restaurant} / cart`);
-          skipped.push({ item: candidate.item, reason: err.message });
-          console.log(`[agent] Skipping ${candidate.restaurant} / cart: ${err.message}`);
-          // Keep trying other candidates — a single cart timeout must not kill the run.
-          continue;
-        }
-        console.log(`[agent] ${candidate.restaurant} / add needs recovery: ${String(err).split('\n')[0]}`);
-        addResult = { ok: false, reason: 'add-unconfirmed' };
+        console.log(`[agent] Add requires reconciliation: ${String(err).split('\n')[0]}`);
+        addResult = { ok: false, status: 'uncertain', phase: 'timeout', reason: String(err).split('\n')[0] };
       }
+      addAttempts.push({ item: candidate.item, result: addResult });
+      if (!addResult.ok && addResult.status === 'uncertain') {
+        try {
+          const reconciled = await reconcileUncertainAdd(tab, candidate);
+          tab = reconciled.page;
+          if (reconciled.matched) addResult = { ...addResult, ok: true, status: 'confirmed', phase: 'reconciled' };
+        } catch (error) {
+          skipped.push({ item: candidate.item, reason: String(error).split('\n')[0], details: addResult });
+          break;
+        }
+      }
+
       if (addResult.ok) {
         picked = candidate;
         chosenItemId = candidate.selectionId ?? candidate.itemId;
@@ -438,14 +439,14 @@ async function orderMeal(mealConfig: MealConfig, scheduledFor: Date, record: Par
       }
       const reason = `couldn't be added (${addResult.reason})`;
       console.log(`[agent] Couldn't add ${candidate.item} — ${addResult.reason}; trying next pick`);
-      skipped.push({ item: candidate.item, reason });
+      skipped.push({ item: candidate.item, reason, details: addResult });
     }
     if (!picked) {
       saveReport(result);
       console.log('[agent] Cart adds failed for every candidate — still showing the top recommendation.');
       return presentRecommendationOnly(
         mealConfig, record, target, config.budgetPerMeal, plan.raw.preferences || {},
-        'Could not add the picks to the DoorDash cart.',
+        `Could not verify a cart: ${skipped.map(s => s.reason).join('; ')}`,
         result.picks[0],
       );
     }
@@ -455,18 +456,23 @@ async function orderMeal(mealConfig: MealConfig, scheduledFor: Date, record: Par
       prepared = await bounded(prepareCheckout(orderPage, picked, result.picks, {
         budget: plan.raw.derived.perOrderBudget,
         includesFees: plan.raw.budget.includesFeesAndTip,
-        brief,
+        brief, target, preferences: plan.raw.preferences, onPage: page => { orderPage = page; },
       }), 4 * 60000, `${picked.restaurant} / checkout recovery`);
     } catch (error) {
+      checkoutRecovery = error && typeof error === 'object' && 'diagnostics' in error ? error.diagnostics : { phase: 'checkout', reason: String(error).split('\n')[0] };
+      skipped.push({ item: picked.item, reason: `checkout-recovery: ${String(error).split('\n')[0]}` });
+      saveReport(result);
+      await closePage(orderPage, 'checkout recovery failed');
       console.log(`[agent] Checkout recovery failed (${error instanceof Error ? error.message.split('\n')[0] : error}); showing recommendation.`);
       return presentRecommendationOnly(
         mealConfig, record, target, config.budgetPerMeal, plan.raw.preferences || {},
-        'Checkout could not be prepared from the live cart.',
+        `Checkout could not be prepared: ${String(error).split('\n')[0]}`,
         picked,
       );
     }
     signal.throwIfAborted();
     const checkout = prepared.checkout;
+    checkoutRecovery = prepared.evidence;
     picked = prepared.picked;
     chosenItemId = picked.selectionId ?? picked.itemId;
     checkoutTotal = checkout.checkoutTotal;
