@@ -1,5 +1,8 @@
 # MacroMe
 
+## Flow Chart
+![FlowChart](/diagram.png)
+
 DoorDash ordering that actually respects your macros.
 
 Tell MacroMe your calorie and protein goals, meal times, budget, and food prefs once. When a meal is due, it opens a real browser, hunts nearby restaurants, builds a cart that fits the slot, and waits for you to approve before anything is charged. Leave it running and it’ll kick off meals on schedule.
