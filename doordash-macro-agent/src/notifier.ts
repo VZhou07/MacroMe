@@ -9,7 +9,7 @@ export function printOrderSummary(meal: MealConfig, picked: PickedMeal): void {
   console.log(`  Agent pick: ${picked.item}`);
   console.log(`  Restaurant: ${picked.restaurant}`);
   console.log(`  Price:      $${picked.price.toFixed(2)}`);
-  const sourceLabel = picked.source === "usda" ? "USDA verified" : "LLM estimate";
+  const sourceLabel = picked.source === "usda" ? "USDA match" : "rough estimate";
   console.log(`  Macros:     ${picked.estimatedMacros.calories} kcal | ${picked.estimatedMacros.protein}g protein | ${picked.estimatedMacros.carbs}g carbs | ${picked.estimatedMacros.fat}g fat  (${sourceLabel})`);
   if (!picked.macroConsistent) {
     console.log("  WARNING:    these macros don't add up to the stated calories — treat as rough");

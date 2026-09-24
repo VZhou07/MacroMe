@@ -108,6 +108,29 @@ test('a changed cart or total cannot be placed using a previous approval', async
   }
 });
 
+test('real submission requires an observed DoorDash confirmation and never retries the click', async (t) => {
+  const previous = process.env.MACROME_DEMO_PLACE;
+  process.env.MACROME_DEMO_PLACE = '0';
+  t.after(() => { if (previous === undefined) delete process.env.MACROME_DEMO_PLACE; else process.env.MACROME_DEMO_PLACE = previous; });
+  await page.setContent(checkout(line('Bowl'), 1));
+  const approved = await readCheckout(page);
+  await page.evaluate(() => { document.querySelector('button[data-testid="PlaceOrderButton"]')!.addEventListener('click', () => {
+    document.body.innerHTML = '<h1>Your order is confirmed</h1>';
+  }); });
+  let submissions = 0;
+  assert.equal(await placeOrder(page, approved, { onSubmit: () => submissions++, confirmationTimeoutMs: 1000 }), true);
+  assert.equal(submissions, 1);
+
+  await page.setContent(checkout(line('Bowl'), 1));
+  const unchanged = await readCheckout(page);
+  await page.evaluate(() => { document.querySelector('button[data-testid="PlaceOrderButton"]')!.addEventListener('click', () => {
+    document.body.dataset.clicked = 'yes';
+  }); });
+  await assert.rejects(placeOrder(page, unchanged, { onSubmit: () => submissions++, confirmationTimeoutMs: 100 }), /submission was attempted.*no confirmation/i);
+  assert.equal(submissions, 2);
+  assert.equal(await page.getAttribute('body', 'data-clicked'), 'yes');
+});
+
 test('dashboard lists the full cart, labels the pick and escapes scraped text', async () => {
   await page.setContent(readFileSync(new URL('../../ui/dashboard.html', import.meta.url), 'utf8').replace(/<script[\s\S]*?<\/script>/g, ''));
   const script = readFileSync(new URL('../../ui/dashboard.js', import.meta.url), 'utf8').split('(async function init()')[0];

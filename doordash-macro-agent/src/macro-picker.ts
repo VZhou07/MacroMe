@@ -1,7 +1,8 @@
 import OpenAI from "openai";
-import { confidentReasoning, fallbackPicks } from "./fallback-picks.js";
+import { confidentReasoning, demoJustification, estimateMacrosFromName, fallbackPicks } from "./fallback-picks.js";
 import { lookupNutrition } from "./nutrition.js";
 import { shuffled } from "./shuffle.js";
+import { isMealCandidate, type FoodPreferences } from './meal-eligibility.js';
 import type { MacroGoals, MealConfig, MealMacros, PickedMeal, StoreMenu } from "./types.js";
 
 const openai = new OpenAI({
@@ -36,6 +37,11 @@ function isMacroConsistent(m: MealMacros): boolean {
   return Math.abs(fromMacros - m.calories) / m.calories <= 0.15;
 }
 
+function copiesTarget(macros: MealMacros, target: MealMacros): boolean {
+  return macros.calories === target.calories && macros.protein === target.protein &&
+    macros.carbs === target.carbs && macros.fat === target.fat;
+}
+
 // Weighted % distance from the target, protein weighted highest to match the
 // "prioritize protein" rule given to the model. Lower is better.
 function distanceScore(macros: MealMacros, target: MealMacros): number {
@@ -48,11 +54,50 @@ function distanceScore(macros: MealMacros, target: MealMacros): number {
   );
 }
 
+function fillShortlist(
+  modelPicks: PickedMeal[],
+  menus: StoreMenu[],
+  target: MealMacros,
+  budgetPerMeal: number,
+  preferences: FoodPreferences,
+): PickedMeal[] {
+  const picks: PickedMeal[] = [];
+  const seenSelections = new Set<string>();
+  const usedComponents = new Set<string>();
+  const componentsOf = (pick: PickedMeal) => pick.components?.length ? pick.components : [{ itemId: pick.itemId }];
+  const componentKey = (pick: PickedMeal, itemId: string) => JSON.stringify([pick.storeUrl, itemId]);
+  const selectionKey = (pick: PickedMeal) => pick.selectionId ??
+    JSON.stringify([pick.storeUrl, ...componentsOf(pick).map((component) => component.itemId).sort()]);
+  const append = (pick: PickedMeal) => {
+    const key = selectionKey(pick);
+    if (seenSelections.has(key)) return false;
+    picks.push(pick);
+    seenSelections.add(key);
+    for (const component of componentsOf(pick)) usedComponents.add(componentKey(pick, component.itemId));
+    return true;
+  };
+
+  for (const pick of modelPicks) {
+    if (picks.length === MAX_PICKS) break;
+    append(pick);
+  }
+  if (picks.length === MAX_PICKS) return picks;
+
+  // Request more than the remaining slots so excluding a model-picked item or
+  // both parts of a combination does not leave usable alternatives behind.
+  for (const candidate of fallbackPicks(menus, target, budgetPerMeal, '', 12, preferences)) {
+    if (picks.length === MAX_PICKS) break;
+    if (componentsOf(candidate).some((component) => usedComponents.has(componentKey(candidate, component.itemId)))) continue;
+    append(candidate);
+  }
+  return picks;
+}
+
 // Returns up to 3 candidates, ranked best-first by actual distance to the
 // macro target. Every candidate is guaranteed to be a real item from the
 // scraped menus — the model only chooses among ids. Macros are verified
 // against USDA FoodData Central where a confident match exists; otherwise
-// the LLM's own estimate is kept and labeled as such.
+// the LLM's estimate is kept unless it just copies every target value.
 export async function pickMeals(
   menus: StoreMenu[],
   mealConfig: MealConfig,
@@ -69,6 +114,7 @@ export async function pickMeals(
     shuffle?: <T>(items: readonly T[]) => T[];
   } = { client: openai, nutrition: lookupNutrition, sleep: (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms)) },
   signal?: AbortSignal,
+  preferences: FoodPreferences = {},
 ): Promise<PickMealsResult> {
   const target = {
     calories: Math.round(dailyMacros.calories * mealConfig.macroShare),
@@ -82,7 +128,7 @@ export async function pickMeals(
   // Round-robin across stores: a large first menu must not crowd out all others.
   // Each menu is shuffled so the picker doesn't always see the same dishes.
   const shuffle = dependencies.shuffle ?? shuffled;
-  const eligible = menus.map((menu) => ({ menu, items: shuffle(menu.items.filter((item) => item.price > 0 && item.price <= budgetPerMeal)) }));
+  const eligible = menus.map((menu) => ({ menu, items: shuffle(menu.items.filter((item) => item.price > 0 && item.price <= budgetPerMeal && isMealCandidate(item, preferences))) }));
   const lines: string[] = [];
   for (let index = 0; index < Math.max(0, ...eligible.map((entry) => entry.items.length)) && lookup.size < limit; index++) {
     for (const [storeIndex, { menu, items }] of eligible.entries()) {
@@ -96,7 +142,7 @@ export async function pickMeals(
   const menuText = lines.join('\n');
 
   if (lookup.size === 0) {
-    const picks = fallbackPicks(menus, target, budgetPerMeal, 'No in-budget items reached the model — empty picker input.');
+    const picks = fallbackPicks(menus, target, budgetPerMeal, 'No eligible items reached the model.', 3, preferences);
     return { picks, debug: { systemPrompt: "", userPrompt: "", rawResponse: "fallback: empty lookup" } };
   }
 
@@ -140,7 +186,7 @@ Return ONLY valid JSON, no extra text: a ranked array of up to 3 choices, best f
       if (!Array.isArray(parsed)) throw new Error('Model response was not an array.');
       if (parsed.length === 0) {
         console.log(`[picker] Model returned no choices; using menu heuristic fallback. Food cap: $${budgetPerMeal.toFixed(2)}; target: ${target.calories} kcal, ${target.protein}P/${target.carbs}C/${target.fat}F.`);
-        const picks = fallbackPicks(menus, target, budgetPerMeal, 'Model returned no choices; ranked menu items by estimated macros.');
+        const picks = fallbackPicks(menus, target, budgetPerMeal, 'Model returned no choices; ranked eligible meals by estimated macros.', 3, preferences);
         return { picks, debug: { systemPrompt, userPrompt, rawResponse } };
       }
       const ranked = (parsed as Ranked[]).slice(0, MAX_PICKS).flatMap((r) => {
@@ -164,7 +210,14 @@ Return ONLY valid JSON, no extra text: a ranked array of up to 3 choices, best f
       const picks: PickedMeal[] = await Promise.all(ranked.map(async (choice) => {
         const components = await Promise.all(choice.components.map(async ({ r, hit }) => {
           const usda = await dependencies.nutrition(hit.item.name);
-          return { itemId: hit.item.id, item: hit.item.name, price: hit.item.price, estimatedMacros: usda?.macros ?? r.estimatedMacros, verified: Boolean(usda) };
+          const targetCopy = !usda && copiesTarget(r.estimatedMacros, target);
+          // A menu description can list mutually exclusive protein options. A
+          // name-only heuristic does not count an unselected option as eaten.
+          const estimatedMacros = usda?.macros ?? (targetCopy
+            ? estimateMacrosFromName(hit.item.name, hit.item.price)
+            : r.estimatedMacros);
+          if (targetCopy) console.log(`[picker] Replaced exact-target estimate for ${hit.item.name} with a rough menu estimate; nutrition was unverified.`);
+          return { itemId: hit.item.id, item: hit.item.name, price: hit.item.price, estimatedMacros, verified: Boolean(usda), targetCopy };
         }));
         const macros = components.reduce((sum, component) => ({
           calories: sum.calories + component.estimatedMacros.calories,
@@ -178,12 +231,14 @@ Return ONLY valid JSON, no extra text: a ranked array of up to 3 choices, best f
           selectionId: JSON.stringify([choice.components[0].hit.menu.url, ...components.map((component) => component.itemId).sort()]),
           itemId: components[0].itemId,
           item,
-          components: components.map(({ verified, ...component }) => component),
+          components: components.map(({ verified, targetCopy, ...component }) => component),
           restaurant,
           storeUrl: choice.components[0].hit.menu.url,
           price: choice.price,
           estimatedMacros: macros,
-          reasoning: confidentReasoning(choice.reasoning, item, restaurant, macros, target, choice.price),
+          reasoning: components.some((component) => component.targetCopy)
+            ? demoJustification(item, restaurant, macros, target, choice.price)
+            : confidentReasoning(choice.reasoning, item, restaurant, macros, target, choice.price),
           source: components.every((component) => component.verified) ? 'usda' as const : 'estimated' as const,
           macroConsistent: isMacroConsistent(macros),
           score: distanceScore(macros, target),
@@ -191,10 +246,14 @@ Return ONLY valid JSON, no extra text: a ranked array of up to 3 choices, best f
       }));
 
       picks.sort((a, b) => a.score - b.score);
-      return { picks, debug: { systemPrompt, userPrompt, rawResponse } };
+      const shortlist = fillShortlist(picks, menus, target, budgetPerMeal, preferences);
+      if (shortlist.length > picks.length) {
+        console.log(`[picker] Model supplied ${picks.length} valid choice(s); added ${shortlist.length - picks.length} eligible menu alternative(s).`);
+      }
+      return { picks: shortlist, debug: { systemPrompt, userPrompt, rawResponse } };
     } catch (err) {
       if (signal?.aborted) {
-        const picks = fallbackPicks(menus, target, budgetPerMeal, 'Selection aborted — using best menu heuristic instead.');
+        const picks = fallbackPicks(menus, target, budgetPerMeal, 'Selection aborted — using eligible menu meals instead.', 3, preferences);
         if (picks.length) return { picks, debug: { systemPrompt, userPrompt, rawResponse: 'fallback: aborted' } };
         throw err;
       }
@@ -216,6 +275,8 @@ Return ONLY valid JSON, no extra text: a ranked array of up to 3 choices, best f
     target,
     budgetPerMeal,
     `Model picker failed (${lastError instanceof Error ? lastError.message.split('\n')[0] : lastError}) — ranked menu items by estimated macros instead.`,
+    3,
+    preferences,
   );
   if (picks.length === 0) {
     return { picks: [], debug: { systemPrompt, userPrompt, rawResponse: `fallback-empty: ${lastError}` } };

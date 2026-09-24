@@ -59,15 +59,59 @@ test('two-item meal uses combined price/macros and rejects mixed-store or over-b
     {items:[item('0:0'),item('0:0')],reasoning:'Invalid duplicate'},
   ])}}} as unknown as OpenAI;
   const result=await pickMeals(menus,meal,macros,20,'Dairy-free',{client,nutrition,sleep,shuffle});
-  assert.equal(result.picks.length,1);
+  assert.equal(result.picks.length,3, 'a valid combination is followed by distinct menu alternatives');
   assert.equal(result.picks[0].components?.length,2);
   assert.equal(result.picks[0].price,20);
   assert.equal(result.picks[0].estimatedMacros.calories,600);
   assert.equal(result.picks[0].estimatedMacros.protein,50);
+  assert.ok(result.picks.slice(1).every(pick => !pick.components?.some(component => ['0', '1'].includes(component.itemId) && pick.storeUrl === menus[0].url)));
   assert.match(result.debug.systemPrompt,/SUM of menu prices/);
   assert.match(result.debug.systemPrompt,/All components must obey dietary/);
   const overBudget = await pickMeals(menus,meal,macros,15,'',{client,nutrition,sleep,shuffle});
   assert.ok(overBudget.picks.length >= 1, 'over-budget model reply still yields heuristic picks');
+});
+
+test('a short or duplicate model reply gains distinct, dairy-compatible in-budget backups', async () => {
+  const foodMenus = [{ store: 'Harvest', url: 'https://example.com/harvest', items: [
+    { id: 'burrito', name: 'Thai Peanut Burrito', description: 'Rice, cabbage, carrots, roasted chicken and peanut sauce.', price: 14.95 },
+    { id: 'bowl', name: 'Roasted Chicken Bowl', description: 'Rice, vegetables and roasted chicken.', price: 16.50 },
+    { id: 'tofu', name: 'Tofu Rice Bowl', description: 'Rice, cabbage and tofu.', price: 13.25 },
+    { id: 'cookie', name: 'Chocolate Chip Cookie', description: 'Single cookie.', price: 5 },
+    { id: 'cheese', name: 'Mac and Cheese', description: 'Pasta and cheddar.', price: 12 },
+    { id: 'expensive', name: 'Salmon Rice Bowl', description: 'Salmon and rice.', price: 30 },
+  ] }];
+  const answer = [0, 1].map(() => ({ itemId: '0:burrito', estimatedMacros: { calories: 510, protein: 32, carbs: 58, fat: 16 }, reasoning: 'A satisfying meal' }));
+  const client = { chat: { completions: { create: async () => ({ choices: [{ message: { content: JSON.stringify(answer) } }] }) } } } as unknown as OpenAI;
+  const result = await pickMeals(foodMenus, meal, macros, 24.81, 'Dairy-free',
+    { client, nutrition, sleep, shuffle }, undefined, { dietary: ['Dairy-free'] });
+  assert.deepEqual(result.picks.map(pick => pick.itemId), ['burrito', 'bowl', 'tofu']);
+  assert.equal(new Set(result.picks.map(pick => pick.selectionId)).size, 3);
+  assert.ok(result.picks.every(pick => pick.price <= 24.81));
+});
+
+test('unverified model macros copied from all four targets are replaced without repeating an unchosen option', async () => {
+  const target = { calories: 516, protein: 38, carbs: 55, fat: 16 };
+  const foodMenus = [{ store: 'Harvest', url: 'https://example.com/harvest', items: [
+    { id: 'burrito', name: 'Thai Peanut Burrito', description: 'Rice, cabbage, choice of peanut tofu or roasted chicken.', price: 14.95 },
+  ] }];
+  const client = { chat: { completions: { create: async () => ({ choices: [{ message: { content: JSON.stringify([
+    { itemId: '0:burrito', estimatedMacros: target, reasoning: 'Exactly meets all macro targets with roasted chicken.' },
+  ]) } }] }) } } } as unknown as OpenAI;
+  const selection = await pickMeals(foodMenus, { ...meal, macroShare: 1 }, target, 24.81, 'Dairy-free',
+    { client, nutrition, sleep, shuffle }, undefined, { dietary: ['Dairy-free'] });
+  const pick = selection.picks[0];
+  assert.equal(pick.item, 'Thai Peanut Burrito');
+  assert.equal(pick.source, 'estimated');
+  assert.notDeepEqual(pick.estimatedMacros, target);
+  assert.deepEqual(pick.components?.[0].estimatedMacros, pick.estimatedMacros);
+  assert.match(pick.reasoning, new RegExp(`~${pick.estimatedMacros.calories} kcal`));
+  assert.doesNotMatch(pick.reasoning, /roasted chicken|exactly meets/i);
+
+  const trusted = await pickMeals(foodMenus, { ...meal, macroShare: 1 }, target, 24.81, 'Dairy-free',
+    { client, nutrition: () => ({ matchedName: 'Thai Peanut Burrito', macros: target }), sleep, shuffle },
+    undefined, { dietary: ['Dairy-free'] });
+  assert.equal(trusted.picks[0].source, 'usda');
+  assert.deepEqual(trusted.picks[0].estimatedMacros, target);
 });
 
 test('empty model array falls back to heuristic picks', async () => {

@@ -2,18 +2,19 @@ import type { Page } from 'playwright-core';
 import type { CheckoutSummary, PickedMeal } from './types.js';
 import type { AddToCartResult, AddOptions } from './doordash.js';
 import { BrowserUnavailableError } from './browser-work.js';
+import { matchesSelectedOptions } from './cart-modifiers.js';
 
 export function mealComponents(pick: PickedMeal) {
   return pick.components?.length ? pick.components : [{ itemId: pick.itemId, item: pick.item, price: pick.price, estimatedMacros: pick.estimatedMacros, selectedOptions: pick.selectedOptions, customizationPrice: pick.customizationPrice }];
 }
-const normalize = (s: string) => s.replace(/\+\s*(?:CA)?\$[\d.]+/g, '').trim().toLowerCase();
+const normalize = (s: string) => s.trim().toLowerCase();
 
 /** Exact quantities and customizations: extra lines must never confirm a meal. */
 export function cartContainsMeal(cart: CheckoutSummary, pick: PickedMeal): boolean {
   const remaining = cart.cartItems.map(line => ({ ...line }));
   for (const component of mealComponents(pick)) {
     const line = remaining.find(line => line.quantity > 0 && normalize(line.name) === normalize(component.item) &&
-      (component.selectedOptions ?? []).every(option => line.modifiers.some(modifier => normalize(modifier).includes(normalize(option)))));
+      matchesSelectedOptions(line.modifiers, component.selectedOptions ?? []));
     if (!line) return false;
     line.quantity--;
   }

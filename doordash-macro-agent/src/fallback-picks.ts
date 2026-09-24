@@ -1,4 +1,5 @@
 import type { MealMacros, PickedMeal, StoreMenu } from './types.js';
+import { isMealCandidate, type FoodPreferences } from './meal-eligibility.js';
 
 function distanceScore(macros: MealMacros, target: MealMacros): number {
   const pct = (value: number, goal: number) => (goal === 0 ? 0 : Math.abs(value - goal) / goal);
@@ -18,9 +19,7 @@ export function demoJustification(
   target: MealMacros,
   price: number,
 ): string {
-  const proteinNote = macros.protein >= target.protein * 0.85
-    ? `solid protein (~${macros.protein}g vs ${target.protein}g target)`
-    : `best protein fit on this menu (~${macros.protein}g) while staying near the calorie target`;
+  const proteinNote = `estimated protein (~${macros.protein}g vs ${target.protein}g target)`;
   return (
     `Picked ${item} from ${restaurant} for ~${macros.calories} kcal at $${price.toFixed(2)} — ` +
     `${proteinNote}, with carbs/fat balanced for this meal ` +
@@ -72,12 +71,13 @@ export function fallbackPicks(
   budgetPerMeal: number,
   _internalReason = '',
   maxPicks = 3,
+  preferences: FoodPreferences = {},
 ): PickedMeal[] {
   const limit = Math.max(1, Math.min(12, Math.floor(maxPicks) || 3));
   const candidates: PickedMeal[] = [];
   for (const menu of menus) {
     for (const item of menu.items) {
-      if (!(item.price > 0) || item.price > budgetPerMeal) continue;
+      if (!(item.price > 0) || item.price > budgetPerMeal || !isMealCandidate(item, preferences)) continue;
       const macros = estimateMacrosFromName(`${item.name} ${item.description}`, item.price);
       candidates.push({
         selectionId: JSON.stringify([menu.url, item.id]),

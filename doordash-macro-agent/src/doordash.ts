@@ -1,4 +1,5 @@
 import { resolveRequiredOptions, assessCustomization, type ModifierContext, type ModifierResult } from './modifiers.js';
+import { matchesSelectedOptions } from './cart-modifiers.js';
 import type { Page } from "playwright-core";
 import type { CheckoutSummary, MenuItem, StoreMenu } from "./types.js";
 
@@ -267,7 +268,7 @@ export async function addItemToCart(
     const root = el.closest('[role="dialog"], [aria-modal="true"]') as HTMLElement | null;
     return root?.innerText.slice(0, 4000) ?? '';
   });
-  options = { ...options, dialogDescription };
+  options = { ...options, storeUrl, dialogDescription };
   const customization = await resolveRequiredOptions(page, options);
   await assessCustomization(options, customization);
   const detail = { selectedOptions: customization.selectedOptions, customization, diagnostics: { item: itemName, description: options.description } };
@@ -290,8 +291,7 @@ export async function addItemToCart(
     }
     const cart = await readCheckout(page, false).catch(() => null);
     const lines = cart?.cartItems.filter(line => line.name.toLowerCase() === itemName.toLowerCase()) ?? [];
-    const modifiersMatch = customization.selectedOptions.every(option => lines.some(line =>
-      line.modifiers.some(modifier => modifier.toLowerCase().includes(option.replace(/\+\s*(?:CA)?\$[\d.]+/g, '').trim().toLowerCase()))));
+    const modifiersMatch = lines.some(line => matchesSelectedOptions(line.modifiers, customization.selectedOptions));
     if (lines.reduce((n,line)=>n+line.quantity,0) === 1 && modifiersMatch &&
         cart?.cartItems.reduce((n,line)=>n+line.quantity,0) === baseline.cartItems.reduce((n,line)=>n+line.quantity,0) + 1 &&
         baseline.cartItems.every(old => cart.cartItems.some(line => line.name === old.name && line.quantity === old.quantity && JSON.stringify(line.modifiers) === JSON.stringify(old.modifiers)))) {
@@ -528,14 +528,17 @@ export async function clearCart(page: Page, expected: CheckoutSummary): Promise<
 }
 
 /**
- * Hackathon demo mode: an approved order counts as placed without charging.
- * On by default; set MACROME_DEMO_PLACE=0 for real checkout.
+ * Explicit demo mode: an approved, verified cart counts as placed without charging.
+ * Real checkout is the default.
  */
 export function demoPlaceEnabled(): boolean {
-  return !/^(?:0|false|off|no)$/i.test(String(process.env.MACROME_DEMO_PLACE ?? '').trim());
+  return /^(?:1|true|on|yes)$/i.test(String(process.env.MACROME_DEMO_PLACE ?? '').trim());
 }
 
-export async function placeOrder(page: Page, approvedCheckout: CheckoutSummary): Promise<boolean> {
+export class OrderSubmissionUnconfirmedError extends Error {}
+
+export async function placeOrder(page: Page, approvedCheckout: CheckoutSummary,
+  options: { onSubmit?: () => void; confirmationTimeoutMs?: number } = {}): Promise<boolean> {
   if (demoPlaceEnabled()) {
     console.log('[doordash] MACROME_DEMO_PLACE: treating Place Order as successful without charging.');
     await page.waitForTimeout(800).catch(() => {});
@@ -552,7 +555,21 @@ export async function placeOrder(page: Page, approvedCheckout: CheckoutSummary):
   if (!(await page.locator('[data-testid="PlaceOrderButton"]').first().isEnabled())) {
     throw new Error('DoorDash has disabled Place Order. Complete the required checkout details in DoorDash before retrying.');
   }
-  await page.locator('[data-testid="PlaceOrderButton"]').first().click();
-  await page.waitForTimeout(8000);
-  return true;
+  // This is the mutation boundary. A timeout after the click may still mean
+  // DoorDash accepted the order, so callers must not blindly retry it.
+  options.onSubmit?.();
+  try {
+    await page.locator('[data-testid="PlaceOrderButton"]').first().click();
+    await page.waitForFunction(() => {
+      const confirmation = document.querySelector('[data-testid="OrderConfirmation"], [data-testid="OrderConfirmationPage"], [data-testid="OrderReceipt"]');
+      if (confirmation && confirmation.getClientRects().length) return true;
+      const path = location.pathname.toLowerCase();
+      if (/\/orders?\/(?:[^/?]+\/)?(?:confirmation|receipt|tracking)\b/.test(path)) return true;
+      const body = document.body?.innerText ?? '';
+      return /\b(?:your order (?:is confirmed|has been placed|was placed)|order (?:confirmed|received|successfully placed)|thank you for (?:your|placing an) order)\b/i.test(body);
+    }, undefined, { timeout: options.confirmationTimeoutMs ?? 20000 });
+    return true;
+  } catch (error) {
+    throw new OrderSubmissionUnconfirmedError(`DoorDash order submission was attempted, but no confirmation was observed. Check DoorDash order history before retrying. ${error instanceof Error ? error.message.split('\n')[0] : String(error)}`);
+  }
 }

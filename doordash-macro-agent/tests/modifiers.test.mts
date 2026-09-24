@@ -1,7 +1,7 @@
 import { before, after, test } from 'node:test';
 import assert from 'node:assert/strict';
 import { chromium, type Browser, type Page } from 'playwright-core';
-import { resolveRequiredOptions, scanOptions, compatible, type OptionGroup } from '../src/modifiers.ts';
+import { resolveRequiredOptions, scanOptions, assessCustomization, compatible, type OptionGroup } from '../src/modifiers.ts';
 let browser: Browser, page: Page;
 before(async()=>{ browser=await chromium.launch({executablePath:process.env.CHROMIUM_PATH}); page=await browser.newPage(); });
 after(async()=>{await browser?.close();});
@@ -73,4 +73,35 @@ test('required quantity buttons use the food row label and preserve optional add
   await page.locator('[data-testid="DecrementQuantity"] + span').evaluate(el => { el.textContent = '2'; });
   await page.locator('[role="group"]').first().evaluate(el => el.setAttribute('data-max','1'));
   assert.equal((await resolve()).complete,false,'existing quantity must count toward the group maximum');
+});
+test('Mary Be dairy-free sides ignore the Add to cart footer and reject vegetarian sides',async()=>{
+  await page.setContent(dialog(`<fieldset><legend>Choice of Sides</legend><p>Required Select 3</p>
+    <label><input type="checkbox">Kale & Cabbage Caesar VT</label>
+    <label><input type="checkbox">Turmeric Rice VG</label>
+    <label><input type="checkbox">Roasted Sweet Potatoes VG</label>
+    <label><input type="checkbox">Roasted Cauliflower VG</label></fieldset>
+    <button data-selected="true">Add to cart - CA$18.69</button>`));
+  const context={item:'Be Green',description:'Choose three sides.',storeUrl:'https://www.doordash.com/store/237559/',preferences:{dietary:['Dairy-free']}};
+  const previousKey=process.env.OPENROUTER_API_KEY;
+  process.env.OPENROUTER_API_KEY='invalid-test-key';
+  let result;
+  try { result=await resolveRequiredOptions(page,context,Date.now()+5000); }
+  finally { if(previousKey===undefined)delete process.env.OPENROUTER_API_KEY; else process.env.OPENROUTER_API_KEY=previousKey; }
+  assert.equal(result.complete,true);
+  assert.deepEqual(result.selectedOptions,['Turmeric Rice VG','Roasted Sweet Potatoes VG','Roasted Cauliflower VG']);
+  await assessCustomization(context,result);
+  assert.equal(result.complete,true);
+});
+
+test('source-backed Harvest required options select the documented GF wrap and protein without a model',async()=>{
+  const description='Rice, Purple Cabbage, Shredded Carrot, Cucumber, Green Onion, Peanuts, Choice of Peanut Tofu or Roasted Chicken, Cilantro, Thai Peanut Sauce';
+  const context={item:'Thai Peanut Burrito',description,storeUrl:'https://www.doordash.com/store/harvest-clean-eats-50516008/',preferences:{dietary:['Dairy-free']}};
+  await page.setContent(dialog(`<fieldset><legend>Wrap Options</legend><p>Required Select 1</p><label><input type="radio" name="wrap" checked>Wrap</label><label><input type="radio" name="wrap">Gluten Free Wrap</label></fieldset><fieldset><legend>Tofu/Chicken</legend><p>Required Select 1</p><label><input type="radio" name="protein">Chicken</label><label><input type="radio" name="protein">Peanut Tofu</label></fieldset>`));
+  const result=await resolveRequiredOptions(page,context,Date.now()+5000);
+  assert.equal(result.complete,true);
+  assert.deepEqual(result.selectedOptions,['Gluten Free Wrap','Chicken']);
+  const previous=process.env.OPENROUTER_API_KEY;
+  try { delete process.env.OPENROUTER_API_KEY; await assessCustomization(context,result); }
+  finally { if(previous===undefined)delete process.env.OPENROUTER_API_KEY; else process.env.OPENROUTER_API_KEY=previous; }
+  assert.equal(result.complete,true);
 });

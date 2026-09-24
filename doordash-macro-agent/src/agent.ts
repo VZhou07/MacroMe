@@ -8,7 +8,7 @@ import { assertConnected, bounded, BrowserUnavailableError, closePage, PageWorkE
 import { loadPlan } from "./plan.js";
 import { addItemToCart, demoPlaceEnabled, findStores, placeOrder, scrapeMenu } from "./doordash.js";
 import { pickMeals } from "./macro-picker.js";
-import { fallbackPicks, syntheticRecommendation } from "./fallback-picks.js";
+import { fallbackPicks } from "./fallback-picks.js";
 import { printCartSummary, printOrderSummary, promptApproval } from "./notifier.js";
 import { printLiveView, liveViewUrl, dashboardUrl } from "./live-view.js";
 import { emit, enableEvents } from "./events.js";
@@ -113,60 +113,17 @@ function completeDemoPlace(record: Partial<DayLogEntry>, picked: PickedMeal, lab
   return true;
 }
 
-/** Always give the dashboard something to show when live DoorDash work cannot finish. */
-async function presentRecommendationOnly(
+/** Report a failed preparation without offering a checkout approval for an unverified cart. */
+async function reportNoOrder(
   mealConfig: MealConfig,
   record: Partial<DayLogEntry>,
-  target: { calories: number; protein: number; carbs: number; fat: number },
-  budgetPerMeal: number,
-  preferences: { cuisines?: string[]; dietary?: string[] },
   why: string,
   preferred?: PickedMeal | null,
 ): Promise<boolean> {
-  const picked = preferred
-    ? preferred
-    : syntheticRecommendation(mealConfig.name, target, budgetPerMeal, preferences);
-  if (why) picked.reasoning = `${picked.reasoning} Cart status: ${why}`;
-  record.pick = pickRecord(picked);
-  printOrderSummary(mealConfig, picked);
-  emit({
-    type: 'picked',
-    item: picked.item,
-    restaurant: picked.restaurant,
-    price: picked.price,
-    macros: picked.estimatedMacros,
-    reasoning: picked.reasoning,
-    source: picked.source,
-  });
-  const checkoutTotal = `~$${picked.price.toFixed(2)} food (fees/tip at checkout)`;
-  const cartItems = [{
-    name: picked.item,
-    quantity: 1,
-    linePrice: `$${picked.price.toFixed(2)}`,
-    modifiers: [],
-  }];
-  record.cartItems = cartItems;
-  record.checkoutTotal = checkoutTotal;
-  emit({
-    type: 'approval-request',
-    item: picked.item,
-    restaurant: picked.restaurant,
-    price: picked.price,
-    checkoutTotal,
-    cartItems,
-    macros: picked.estimatedMacros,
-    reasoning: picked.reasoning,
-    reportPath: null,
-  });
-  const approved = await promptApproval();
-  if (approved && demoPlaceEnabled()) {
-    return completeDemoPlace(record, picked);
-  }
-  const message = approved
-    ? `Recommended ${picked.item} from ${picked.restaurant}. Confirm in DoorDash if you want to place it, or run again for a live cart.`
-    : `Passed on ${picked.item}. Nothing was charged.`;
-  record.status = 'declined';
-  record.note = why ? `${message} (${why})` : message;
+  if (preferred) record.pick = pickRecord(preferred);
+  const message = `No order placed for ${mealConfig.name}. ${why}`;
+  record.status = 'failed';
+  record.note = message;
   flushDayLog(record);
   console.log(`[agent] ${message}`);
   emit({ type: 'result', placed: false, message });
@@ -199,6 +156,7 @@ async function orderMeal(mealConfig: MealConfig, scheduledFor: Date, record: Par
   let approved: boolean | null = null;
   let chosenItemId: string | null = null;
   let orderPlaced = false;
+  let orderSubmissionAttempted = false;
 
   // Written right before the approval prompt so a report exists even if the
   // run is interrupted there, and again at the very end with the outcome.
@@ -221,7 +179,7 @@ async function orderMeal(mealConfig: MealConfig, scheduledFor: Date, record: Par
   if (isDryRun) {
     console.log("[agent] DRY RUN — no Steel browser / no live view link.");
     console.log("[agent] For a browser link, run: npm run setup-profile  (login) or  npm start  (live order)");
-    const result = await pickMeals(MOCK_MENUS, mealConfig, config.macros, config.budgetPerMeal, brief);
+    const result = await pickMeals(MOCK_MENUS, mealConfig, config.macros, config.budgetPerMeal, brief, undefined, undefined, plan.raw.preferences);
     chosenItemId = result.picks[0]?.selectionId ?? result.picks[0]?.itemId ?? null;
     if (result.picks[0]) {
       printOrderSummary(mealConfig, result.picks[0]);
@@ -238,9 +196,9 @@ async function orderMeal(mealConfig: MealConfig, scheduledFor: Date, record: Par
   }
 
   if (!process.env.STEEL_PROFILE_ID) {
-    console.log('[agent] No Steel profile — offering an offline recommendation.');
-    return presentRecommendationOnly(
-      mealConfig, record, target, config.budgetPerMeal, plan.raw.preferences || {},
+    console.log('[agent] No Steel profile; no order can be prepared.');
+    return reportNoOrder(
+      mealConfig, record,
       'STEEL_PROFILE_ID is not set. Run npm run setup-profile once.',
     );
   }
@@ -258,7 +216,7 @@ async function orderMeal(mealConfig: MealConfig, scheduledFor: Date, record: Par
   } catch (error) {
     const why = `Could not start a Steel session: ${error instanceof Error ? error.message.split('\n')[0] : error}`;
     console.log(`[agent] ${why}`);
-    return presentRecommendationOnly(mealConfig, record, target, config.budgetPerMeal, plan.raw.preferences || {}, why);
+    return reportNoOrder(mealConfig, record, why);
   }
   printLiveView("agent", session);
   emit({ type: "live-view", url: liveViewUrl(session), dashboardUrl: dashboardUrl(session), sessionId: session.id });
@@ -320,9 +278,9 @@ async function orderMeal(mealConfig: MealConfig, scheduledFor: Date, record: Par
     }
     stores = shuffled(stores);
     if (stores.length === 0) {
-      console.log('[agent] No stores found — offering an offline recommendation so the run still completes.');
-      return presentRecommendationOnly(mealConfig, record, target, config.budgetPerMeal, plan.raw.preferences || {},
-        'No DoorDash stores were found (profile may be logged out). Re-run setup-profile when you can; here is a recommended meal anyway.');
+      console.log('[agent] No stores found; no order can be prepared.');
+      return reportNoOrder(mealConfig, record,
+        'No DoorDash stores were found (profile may be logged out). Re-run setup-profile before retrying.');
     }
 
     let storesRead = 0;
@@ -355,32 +313,32 @@ async function orderMeal(mealConfig: MealConfig, scheduledFor: Date, record: Par
       const why = storesRead > 0
         ? `Menus loaded but nothing was ≤ $${config.budgetPerMeal.toFixed(2)} for food.`
         : 'Could not read any restaurant menus.';
-      console.log(`[agent] ${why} Offering a recommendation so UX does not dead-end.`);
-      return presentRecommendationOnly(mealConfig, record, target, config.budgetPerMeal, plan.raw.preferences || {}, why);
+      console.log(`[agent] ${why}`);
+      return reportNoOrder(mealConfig, record, why);
     }
 
     assertConnected(activeBrowser);
     let result: Awaited<ReturnType<typeof pickMeals>>;
     try {
-      result = await pickMeals(menus, mealConfig, config.macros, config.budgetPerMeal, brief, undefined, signal);
+      result = await pickMeals(menus, mealConfig, config.macros, config.budgetPerMeal, brief, undefined, signal, plan.raw.preferences);
     } catch (error) {
       console.log(`[agent] Picker threw (${error instanceof Error ? error.message.split('\n')[0] : error}); using menu heuristic.`);
-      const picks = fallbackPicks(menus, target, config.budgetPerMeal);
+      const picks = fallbackPicks(menus, target, config.budgetPerMeal, '', 3, plan.raw.preferences);
       result = { picks, debug: { systemPrompt: '', userPrompt: '', rawResponse: `agent-fallback: ${error}` } };
     }
     assertConnected(activeBrowser);
     if (!result.picks.length) {
-      const picks = fallbackPicks(menus, target, config.budgetPerMeal);
+      const picks = fallbackPicks(menus, target, config.budgetPerMeal, '', 3, plan.raw.preferences);
       result = { ...result, picks };
     }
     if (!result.picks.length) {
-      return presentRecommendationOnly(mealConfig, record, target, config.budgetPerMeal, plan.raw.preferences || {},
+      return reportNoOrder(mealConfig, record,
         'No in-budget menu items survived filtering.');
     }
 
     // Stick to a short ranked list — stacking many adds was blowing past budget
     // when leftovers stayed in the DoorDash cart.
-    console.log(`[agent] Will try up to ${result.picks.length} cart candidate(s) before falling back to a recommendation.`);
+    console.log(`[agent] Will try up to ${result.picks.length} cart candidate(s).`);
 
     let picked = null;
     let orderPage = page;
@@ -443,9 +401,9 @@ async function orderMeal(mealConfig: MealConfig, scheduledFor: Date, record: Par
     }
     if (!picked) {
       saveReport(result);
-      console.log('[agent] Cart adds failed for every candidate — still showing the top recommendation.');
-      return presentRecommendationOnly(
-        mealConfig, record, target, config.budgetPerMeal, plan.raw.preferences || {},
+      console.log('[agent] Cart adds failed for every candidate; no approval will be offered.');
+      return reportNoOrder(
+        mealConfig, record,
         `Could not verify a cart: ${skipped.map(s => s.reason).join('; ')}`,
         result.picks[0],
       );
@@ -463,9 +421,9 @@ async function orderMeal(mealConfig: MealConfig, scheduledFor: Date, record: Par
       skipped.push({ item: picked.item, reason: `checkout-recovery: ${String(error).split('\n')[0]}` });
       saveReport(result);
       await closePage(orderPage, 'checkout recovery failed');
-      console.log(`[agent] Checkout recovery failed (${error instanceof Error ? error.message.split('\n')[0] : error}); showing recommendation.`);
-      return presentRecommendationOnly(
-        mealConfig, record, target, config.budgetPerMeal, plan.raw.preferences || {},
+      console.log(`[agent] Checkout recovery failed (${error instanceof Error ? error.message.split('\n')[0] : error}).`);
+      return reportNoOrder(
+        mealConfig, record,
         `Checkout could not be prepared: ${String(error).split('\n')[0]}`,
         picked,
       );
@@ -507,7 +465,7 @@ async function orderMeal(mealConfig: MealConfig, scheduledFor: Date, record: Par
     assertConnected(activeBrowser);
     if (Date.now() >= expiresAt) throw new Error('Steel session expired before approval could be applied. Start a new run.');
     if (approved) {
-      const placed = await placeOrder(orderPage, checkout);
+      const placed = await placeOrder(orderPage, checkout, { onSubmit: () => { orderSubmissionAttempted = true; } });
       orderPlaced = placed;
       const message = placed
         ? "Order placed! Check DoorDash for confirmation."
@@ -531,17 +489,21 @@ async function orderMeal(mealConfig: MealConfig, scheduledFor: Date, record: Par
   } catch (error) {
     const detail = error instanceof Error ? error.message.split('\n')[0] : String(error);
     if (!record.pick && !orderPlaced) {
-      console.log(`[agent] Recovering from crash with an offline recommendation: ${detail}`);
+      console.log(`[agent] Recording failed order preparation: ${detail}`);
       try {
-        return await presentRecommendationOnly(
-          mealConfig, record, target, config.budgetPerMeal, plan.raw.preferences || {},
+        return await reportNoOrder(
+          mealConfig, record,
           detail,
         );
       } catch (recoveryError) {
-        console.log(`[agent] Recommendation recovery also failed: ${recoveryError instanceof Error ? recoveryError.message : recoveryError}`);
+        console.log(`[agent] Failure recording also failed: ${recoveryError instanceof Error ? recoveryError.message : recoveryError}`);
       }
     }
-    const message = `${orderPlaced ? 'Order was placed, but follow-up failed.' : 'No order placed.'} ${detail}`;
+    const message = orderPlaced
+      ? `Order was placed, but follow-up failed. ${detail}`
+      : orderSubmissionAttempted
+        ? `Order submission was attempted, but confirmation is unavailable. Check DoorDash order history before retrying. ${detail}`
+        : `No order placed. ${detail}`;
     record.status = orderPlaced ? 'placed' : 'failed';
     record.note = message;
     flushDayLog(record);

@@ -4,6 +4,13 @@ import type { MealMacros } from "./types.js";
 
 const DB_PATH = "data/nutrition.db";
 const MATCH_THRESHOLD = 0.5;
+// A shared flavour is not enough to identify a prepared meal: for example,
+// "Thai Peanut Burrito" otherwise matches a 33 g Thai peanut sauce serving.
+const DISH_FORMS = [
+  /\bburritos?\b/i, /\bwraps?\b/i, /\bbowls?\b/i, /\bsalads?\b/i,
+  /\bsandwich(?:es)?\b/i, /\bburgers?\b/i, /\btacos?\b/i,
+  /\bpizzas?\b/i, /\bquesadillas?\b/i, /\bpastas?\b/i, /\bnoodles?\b/i,
+];
 
 interface NutritionMatch {
   macros: MealMacros;
@@ -46,6 +53,11 @@ function similarity(itemName: string, candidateDescription: string): number {
   return intersection / new Set([...a, ...b]).size;
 }
 
+function matchesDishForm(itemName: string, candidateDescription: string): boolean {
+  const forms = DISH_FORMS.filter((form) => form.test(itemName));
+  return forms.length === 0 || forms.some((form) => form.test(candidateDescription));
+}
+
 // FTS5 MATCH syntax treats bare space-separated terms as AND, which is too
 // strict for menu-item phrasing — join with OR so any shared word surfaces a
 // candidate, then rank candidates ourselves with the same similarity scorer
@@ -56,11 +68,10 @@ function ftsQuery(itemName: string): string | null {
   return terms.map((t) => `"${t.replace(/"/g, '""')}"`).join(" OR ");
 }
 
-export function lookupNutrition(itemName: string): NutritionMatch | null {
-  const database = getDb();
+export function lookupNutrition(itemName: string, database: DatabaseSync | null = getDb()): NutritionMatch | null {
   if (!database) {
     if (!warnedMissing) {
-      console.warn("[nutrition] data/nutrition.db not found — run `npm run build-nutrition-db` to enable USDA-verified macros. Falling back to LLM estimates only.");
+      console.warn("[nutrition] data/nutrition.db not found — run `npm run build-nutrition-db` to enable USDA nutrition matching. Falling back to rough estimates.");
       warnedMissing = true;
     }
     return null;
@@ -79,6 +90,7 @@ export function lookupNutrition(itemName: string): NutritionMatch | null {
 
   let best: { row: FoodRow; score: number } | null = null;
   for (const row of rows) {
+    if (!matchesDishForm(itemName, row.description)) continue;
     const score = similarity(itemName, row.description);
     if (score >= MATCH_THRESHOLD && (!best || score > best.score)) best = { row, score };
   }

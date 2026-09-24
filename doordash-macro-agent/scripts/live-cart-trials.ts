@@ -44,7 +44,7 @@ try {
   for(const store of stores){
     try {
       const menu=await withStorePage(context, `trial menu ${store.name}`, 65000, tab=>scrapeMenu(tab,store,plan.config.budgetPerMeal));
-      const picks=await pickMeals([menu],plan.config.meals[0],plan.config.macros,plan.config.budgetPerMeal,plan.briefFor(plan.config.meals[0].name));
+      const picks=await pickMeals([menu],plan.config.meals[0],plan.config.macros,plan.config.budgetPerMeal,plan.briefFor(plan.config.meals[0].name),undefined,undefined,plan.raw.preferences);
       if(picks.picks[0]) candidates.push(picks.picks[0]);
     } catch(error){report.discovery.push({store:store.name,reason:String(error).split('\n')[0]});}
     report.candidates=candidates; save();if(candidates.length>=5) break;

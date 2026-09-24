@@ -20,7 +20,7 @@ Built with a Node web app, Steel cloud browser, Playwright, OpenRouter for meal 
 - Missed meals recorded when the laptop was asleep — never ordered late
 - Optional MCP tools so Cursor, Claude Code, or Codex can read today’s summary or email a digest
 
-Nothing is charged until you press **Place order** (unless demo place mode is on).
+Nothing is charged until you approve the verified checkout; the agent then presses DoorDash’s **Place Order** button. Explicit demo mode does not charge.
 
 ## How it fits together
 
@@ -78,7 +78,7 @@ Without these three you can still edit the plan, but **Run now** / scheduled liv
 | `RESEND_API_KEY` + `DIGEST_EMAIL` | Email Final digests ([resend.com](https://resend.com)) |
 | `MACROME_EMAIL_FROM` | Custom From (needs a verified Resend domain for non-account inboxes) |
 | `MACROME_MODEL` | OpenRouter model id (default: free Nemotron). Example: `anthropic/claude-sonnet-4` |
-| `MACROME_DEMO_PLACE` | Demo place without charging (default **on**; set `0` for real payment) |
+| `MACROME_DEMO_PLACE` | Set `1` for an explicit demo without charging; default `0` uses real checkout after approval |
 | `MACROME_MAX_STORES` | Menus to compare (default `3`; use `1` for faster demos) |
 | `MACROME_SEARCH_BUDGET_SECONDS` | Discovery time budget (default `240`; try `120` for demos) |
 | `MACROME_MAX_MENU_ITEMS` | Items sent to the picker (default `20`) |
@@ -115,7 +115,7 @@ Open http://localhost:3000.
 - [ ] Steel + OpenRouter keys set
 - [ ] `setup-profile` done and `STEEL_PROFILE_ID` saved
 - [ ] `npm run dev` left running
-- [ ] For real charges: `MACROME_DEMO_PLACE=0` and a valid DoorDash payment method
+- [ ] For real charges: a valid DoorDash payment method and `MACROME_DEMO_PLACE=0` (the default)
 - [ ] For email digests: Resend key + `DIGEST_EMAIL`
 
 ## Using the product
@@ -135,7 +135,7 @@ Open **/setup** anytime to edit the plan.
 
 You’ll see cart lines, prices, DoorDash’s checkout total, and the **Agent pick**. **Place order** confirms the whole cart. **Don’t order** cancels without charging.
 
-**Demo place mode** (default): approving records the meal as placed for Today and digests **without** charging DoorDash. Set `MACROME_DEMO_PLACE=0` for real checkout.
+**Real checkout is the default.** After a verified cart and total are shown, approving presses DoorDash’s Place Order button. Set `MACROME_DEMO_PLACE=1` only for a demo; it records a verified cart as placed without charging DoorDash. A recommendation without a verified cart cannot be approved or recorded as placed.
 
 ### Today and digests
 
@@ -201,7 +201,7 @@ The Codex MCP configuration uses this checkout's absolute launcher and working d
 
 On Ubuntu, run `bash scripts/setup-sandbox.sh` in a terminal with sudo access to install bubblewrap and verify user-namespace startup. On Ubuntu 24.04 the script installs the additional AppArmor profile only if the initial check fails. It follows the [official sandbox prerequisites](https://learn.chatgpt.com/docs/sandboxing) and does not disable AppArmor globally.
 
-Required food options are selected within the item dialog using the meal goals, dietary restrictions, avoided ingredients, and food budget. Optional extras stay unchanged. Unresolved choices stop the add and appear in the HTML/JSON decision report. Customized nutrition is re-estimated for the whole serving; it is not labeled USDA verified.
+Required food options are selected within the item dialog using the meal goals, dietary restrictions, avoided ingredients, and food budget. Documented dairy-free choices take priority; unknown ingredients need whole-meal validation, and optional extras stay unchanged. Unresolved choices stop the add and appear in the HTML/JSON decision report. Nutrition remains labeled as an estimate unless a matching whole dish is verified; a condiment's USDA serving cannot verify a restaurant burrito.
 
 Cart confirmation requires matching item lines, quantities, and selected modifiers. A timed-out or uncertain add closes its browser tab and reconciles through a fresh cart inspection before another mutation. An unreadable cart or failed cleanup stops further additions.
 
@@ -234,7 +234,7 @@ Short-lived serverless functions are a poor fit. For the hackathon and personal 
 - Deploy the same Node process to a host that stays up (Railway, Fly, Render, or a VPS), not a serverless web-only host
 - Keep one process owning site + cron (same as local)
 - Move secrets to the host’s env; keep Steel profile + DoorDash login healthy
-- Turn off demo place (`MACROME_DEMO_PLACE=0`) and require real payment methods
+- Keep real checkout enabled (`MACROME_DEMO_PLACE=0`) and require a valid DoorDash payment method
 - Optional: separate worker only if you outgrow a single box
 
 **Later (multi-user product)**
@@ -273,7 +273,7 @@ Default meal model: `nvidia/nemotron-3-super-120b-a12b:free` via OpenRouter. Ove
 | `MACROME_MODEL` | no | OpenRouter model id |
 | `RESEND_API_KEY` / `DIGEST_EMAIL` | email | Final digest mail |
 | `MACROME_EMAIL_FROM` | no | Sender address |
-| `MACROME_DEMO_PLACE` | no | Demo place (default on; `0` = real) |
+| `MACROME_DEMO_PLACE` | no | Real checkout by default; `1` = explicit demo |
 | `MACROME_MAX_STORES` | no | Restaurants to compare |
 | `MACROME_SEARCH_BUDGET_SECONDS` | no | Discovery budget |
 | `MACROME_MAX_MENU_ITEMS` | no | Picker menu size |

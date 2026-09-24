@@ -29,7 +29,7 @@ function macroRow(label: string, m: MealMacros): string {
 function candidateCard(c: PickedMeal, rank: number, isChosen: boolean): string {
   const sourceBadge = c.source === "usda"
     ? `<span class="badge badge-usda">USDA verified</span>`
-    : `<span class="badge badge-estimated">LLM estimate</span>`;
+    : `<span class="badge badge-estimated">Rough estimate</span>`;
   const consistencyBadge = c.macroConsistent
     ? ""
     : `<span class="badge badge-warn">macros don't add up to stated calories</span>`;
